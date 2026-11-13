@@ -6,7 +6,10 @@ from typing import Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
-load_dotenv()
+# Resolve the backend configuration independently of the process working directory.
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"), override=False)
+
+GEMINI_MODEL = "gemini-3.8-flash"
 
 logger = logging.getLogger("gemini_copilot")
 
@@ -127,7 +130,7 @@ def extract_rule_from_multimodal(
             contents.append(types.Part.from_bytes(data=audio_bytes, mime_type="audio/webm"))
 
         response = client.models.generate_content(
-            model="gemini-3.8-flash",
+            model=GEMINI_MODEL,
             contents=contents,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -141,7 +144,8 @@ def extract_rule_from_multimodal(
         return rule
 
     except Exception as e:
-        logger.error(f"Gemini API call failed: {e}. Falling back to heuristic rule generator.")
+        # SDK exception text can contain request URLs or credential-bearing details.
+        logger.warning("Gemini API call failed (%s). Using offline heuristic rule generator.", type(e).__name__)
         return _offline_fallback_rule(
             text_instruction,
             has_image=image_bytes is not None,

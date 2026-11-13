@@ -6,7 +6,8 @@ from typing import Dict, Any, Optional
 from PIL import Image, ImageDraw, ImageFilter
 from dotenv import load_dotenv
 
-load_dotenv()
+# Resolve the backend configuration independently of the process working directory.
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"), override=False)
 
 logger = logging.getLogger("cloudinary_media")
 
