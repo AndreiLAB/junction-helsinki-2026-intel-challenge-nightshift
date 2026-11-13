@@ -4,7 +4,7 @@
 
 @layer base {
   body {
-    @apply bg-[#06080d] text-slate-100 font-sans antialiased selection:bg-intel-blue selection:text-white;
+    @apply bg-[#0b0f14] text-[#edf2f7] font-sans antialiased selection:bg-[#55dbb1] selection:text-[#0b0f14];
   }
 }
 
@@ -14,14 +14,14 @@
   height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #090d14;
+  background: #0e131a;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1b2434;
-  border-radius: 2px;
+  background: #26313e;
+  border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #0071C5;
+  background: #55dbb1;
 }
 
 .tabular-nums {

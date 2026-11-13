@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
+import Sidebar from './components/Sidebar';
+import PerformanceOverview from './components/PerformanceOverview';
 import ClosedLoopPipeline from './components/ClosedLoopPipeline';
 import DualCameraFeed from './components/DualCameraFeed';
 import IntelTelemetry from './components/IntelTelemetry';
 import GeminiCopilot from './components/GeminiCopilot';
 import NemotronAuditFeed from './components/NemotronAuditFeed';
 import CycleModal from './components/CycleModal';
-import { Play } from 'lucide-react';
+import { Play, ChevronDown, ArrowRight, ToggleLeft, ToggleRight } from 'lucide-react';
 
 export default function App() {
   const [activeStage, setActiveStage] = useState('IDLE');
@@ -16,6 +18,7 @@ export default function App() {
   const [simulationRunning, setSimulationRunning] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
   const [selectedCycle, setSelectedCycle] = useState(null);
+  const [activeTab, setActiveTab] = useState('overview');
 
   const wsRef = useRef(null);
 
@@ -156,102 +159,146 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-obsidian-950 text-slate-100 flex flex-col p-3 sm:p-4 lg:p-5 space-y-3 max-w-[1600px] mx-auto">
-      {/* Top Header Bar */}
-      <header className="flex flex-col sm:flex-row sm:items-center justify-between bg-obsidian-900 border border-obsidian-border rounded-xl px-4 py-2.5 shadow-xl backdrop-blur-md gap-2.5">
-        {/* Left: Intel Robotics Branding */}
-        <div className="flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-lg bg-intel-blue flex items-center justify-center font-bold text-white text-base tracking-wider shadow-md shadow-glow-intel shrink-0">
-            intel
+    <div className="min-h-screen bg-[#0b0f14] text-[#edf2f7] flex flex-col lg:flex-row w-full font-sans antialiased">
+      {/* 1. Left Sidebar Navigation matching Figma */}
+      <Sidebar
+        activeTab={activeTab}
+        onSelectTab={setActiveTab}
+        wsConnected={wsConnected}
+      />
+
+      {/* 2. Main Inspection Workspace */}
+      <div className="flex-1 flex flex-col min-w-0 bg-[#0b0f14]">
+        {/* Global Toolbar */}
+        <header className="h-[72px] bg-[#0e131a] border-b border-[#26313e] px-6 flex items-center justify-between shrink-0">
+          {/* Breadcrumbs */}
+          <div className="flex items-center space-x-2 text-[12px]">
+            <span className="text-[#8e9bae]">Workspace</span>
+            <ArrowRight className="w-3.5 h-3.5 text-[#8e9bae]" />
+            <span className="font-medium text-[#edf2f7] text-[13px]">Inspection cell</span>
+            <div className="bg-[#18212c] px-2.5 py-0.5 rounded-[5px] ml-2 border border-[#26313e]">
+              <span className="text-[11px] font-medium text-[#b5c0ce]">SO-ARM101</span>
+            </div>
           </div>
-          <div>
+
+          {/* Right Status & Operator Badge */}
+          <div className="flex items-center space-x-4">
             <div className="flex items-center space-x-2">
-              <h1 className="text-sm font-extrabold tracking-tight text-white font-mono uppercase">
-                PHYSICAL AI STUDIO • AUTONOMOUS INSPECTION CELL
-              </h1>
-              <span className="text-[9px] font-mono px-2 py-0.2 rounded-full bg-intel-blue/20 text-intel-light border border-intel-blue/40 font-semibold">
-                Junction 2026
+              <div className="w-1.5 h-1.5 rounded-full bg-[#55dbb1] animate-pulse" />
+              <span className="text-[12px] text-[#b5c0ce] font-normal hidden sm:inline">
+                All systems operational
               </span>
             </div>
-            <div className="text-[11px] text-slate-400 font-mono flex flex-wrap items-center gap-x-2">
-              <span>Member 4: Gemini Multimodal Copilot & Cloudinary Media Hub</span>
-              <span className="text-slate-600 hidden md:inline">•</span>
-              <span className="text-emerald-400 font-medium">LeRobot SO-ARM101 • CAM-01 Top-View & CAM-02 Inspection</span>
+
+            <div className="h-4 w-px bg-[#26313e] hidden sm:block" />
+
+            <div className="bg-[#18212c] border border-[#26313e] px-3 py-1.5 rounded-[5px] flex items-center space-x-2 cursor-pointer hover:border-[#55dbb1]/50 transition-colors">
+              <span className="text-[11px] text-[#b5c0ce]">Operator</span>
+              <ChevronDown className="w-3.5 h-3.5 text-[#8e9bae]" />
             </div>
           </div>
-        </div>
+        </header>
 
-        {/* Right: Dispatch status badge & Pitch controls */}
-        <div className="flex items-center space-x-2.5 shrink-0 self-end sm:self-auto">
-          <div className="flex items-center space-x-2 bg-obsidian-950 px-2.5 py-1 rounded-lg border border-obsidian-border">
-            {wsConnected ? (
-              <>
-                <div className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span className="text-[11px] font-mono text-emerald-400 font-semibold">DISPATCH LIVE</span>
-              </>
-            ) : (
-              <>
-                <div className="w-2 h-2 rounded-full bg-amber-400" />
-                <span className="text-[11px] font-mono text-amber-400 font-semibold">CONNECTING...</span>
-              </>
-            )}
+        {/* Dashboard Content */}
+        <main className="p-4 sm:p-6 space-y-4 max-w-[1400px] w-full mx-auto">
+          {/* Page Heading & Main Action */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h1 className="text-[27px] font-semibold text-[#edf2f7] leading-tight">
+                Mission control
+              </h1>
+              <p className="text-[13px] text-[#8e9bae] mt-1">
+                Autonomous inspection, from perception to action.
+              </p>
+            </div>
+
+            <div className="flex items-center space-x-3 self-end sm:self-auto shrink-0">
+              {/* Dispatch Live Indicator */}
+              <div className="bg-[#15352e] border border-[#55dbb1]/30 px-3 py-1 rounded-[5px] flex items-center space-x-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#55dbb1] animate-ping" />
+                <span className="text-[11px] font-medium text-[#55dbb1]">Dispatch live</span>
+              </div>
+
+              {/* Simulate Cycle Primary Button */}
+              <button
+                onClick={() => handleTriggerCycle()}
+                className="bg-[#55dbb1] hover:bg-[#55dbb1]/90 active:scale-95 text-[#0b0f14] px-4 py-2 rounded-[6px] text-[13px] font-semibold flex items-center space-x-2 transition-all shadow-md shadow-[#55dbb1]/20"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                <span>Simulate cycle</span>
+              </button>
+            </div>
           </div>
 
-          <button
-            onClick={() => handleTriggerCycle()}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-bold bg-intel-blue hover:bg-intel-light hover:text-slate-950 text-white transition-all shadow-md active:scale-95 shadow-glow-intel"
-          >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            <span>Simulate Cycle</span>
-          </button>
-        </div>
-      </header>
+          {/* Performance Overview (4 Stat Cards) */}
+          <PerformanceOverview cycles={recentCycles} />
 
-      {/* 1. Closed-Loop Pipeline Bar */}
-      <ClosedLoopPipeline activeStage={activeStage} />
+          {/* Closed-Loop Autonomous Pipeline Bar */}
+          <ClosedLoopPipeline activeStage={activeStage} />
 
-      {/* Main Grid Row 1: Dual-Camera Feed & Intel Telemetry */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <DualCameraFeed currentCycle={currentCycle} />
-        <IntelTelemetry
-          metrics={hardwareMetrics}
-          simulationRunning={simulationRunning}
-          onTriggerCycle={handleTriggerCycle}
-          onToggleContinuousSimulation={handleToggleContinuousSimulation}
-        />
+          {/* Grid Row 1: Live Inspection & Edge Telemetry */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <div className="lg:col-span-7 xl:col-span-8">
+              <DualCameraFeed currentCycle={currentCycle} />
+            </div>
+            <div className="lg:col-span-5 xl:col-span-4">
+              <IntelTelemetry
+                metrics={hardwareMetrics}
+                simulationRunning={simulationRunning}
+                onTriggerCycle={handleTriggerCycle}
+                onToggleContinuousSimulation={handleToggleContinuousSimulation}
+              />
+            </div>
+          </div>
+
+          {/* Grid Row 2: Floor Copilot & Inspection History */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <div className="lg:col-span-5 xl:col-span-5">
+              <GeminiCopilot
+                activeRules={activeRules}
+                onRuleCreated={handleRuleCreated}
+                onRuleDeleted={handleRuleDeleted}
+              />
+            </div>
+            <div className="lg:col-span-7 xl:col-span-7">
+              <NemotronAuditFeed
+                cycles={recentCycles}
+                onSelectCycle={(cycle) => setSelectedCycle(cycle)}
+              />
+            </div>
+          </div>
+
+          {/* System Footer matching Figma */}
+          <footer className="pt-2 pb-4 text-[10px] text-[#8e9bae] flex flex-wrap items-center justify-between gap-3 border-t border-[#26313e]/60">
+            <div className="flex items-center space-x-3">
+              <span className="font-medium text-[#b5c0ce]">OpenVINO 2026.0</span>
+              <span>/</span>
+              <span>Anomalib 2.7.0</span>
+              <span>/</span>
+              <span>SmolVLA · ACT</span>
+              <span>/</span>
+              <span>Intel Core Ultra Series 3</span>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <span className="text-[#b5c0ce]">Auto-cycle stream</span>
+              <button
+                onClick={handleToggleContinuousSimulation}
+                className="flex items-center space-x-1.5 focus:outline-none"
+              >
+                {simulationRunning ? (
+                  <ToggleRight className="w-5 h-5 text-[#55dbb1]" />
+                ) : (
+                  <ToggleLeft className="w-5 h-5 text-[#8e9bae]" />
+                )}
+                <span className={`text-[10px] font-medium ${simulationRunning ? 'text-[#55dbb1]' : 'text-[#8e9bae]'}`}>
+                  {simulationRunning ? 'On' : 'Off'}
+                </span>
+              </button>
+            </div>
+          </footer>
+        </main>
       </div>
-
-      {/* Main Grid Row 2: Gemini Copilot & Nemotron Audit Feed */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <GeminiCopilot
-          activeRules={activeRules}
-          onRuleCreated={handleRuleCreated}
-          onRuleDeleted={handleRuleDeleted}
-        />
-        <NemotronAuditFeed
-          cycles={recentCycles}
-          onSelectCycle={(cycle) => setSelectedCycle(cycle)}
-        />
-      </div>
-
-      {/* Footer Hardware Spec Bar */}
-      <footer className="bg-obsidian-900 border border-obsidian-border rounded-xl px-4 py-2 text-[10.5px] font-mono text-slate-500 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center space-x-2">
-          <span className="text-intel-light font-semibold">Stack:</span>
-          <span>OpenVINO™ 2026.0 Physical AI</span>
-          <span>•</span>
-          <span>Anomalib v2.7.0 (50 TOPS NPU)</span>
-          <span>•</span>
-          <span>SmolVLA / ACT (12 Xe3 Cores)</span>
-          <span>•</span>
-          <span>Gemini 3.8 Flash (Multimodal)</span>
-          <span>•</span>
-          <span>Cloudinary Media Pipeline</span>
-        </div>
-        <div className="text-slate-400">
-          Intel® Core™ Ultra X9 388H (50-TOPS NPU • 12 Xe3 iGPU • CPU) • Heterogeneous Acceleration Active
-        </div>
-      </footer>
 
       {/* Inspection Modal */}
       {selectedCycle && (
