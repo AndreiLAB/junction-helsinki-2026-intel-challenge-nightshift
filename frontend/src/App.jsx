@@ -9,6 +9,9 @@ import NemotronAuditFeed from './components/NemotronAuditFeed';
 import CycleModal from './components/CycleModal';
 import { Play, ChevronDown, ArrowRight, ToggleLeft, ToggleRight } from 'lucide-react';
 
+const API_BASE = import.meta.env.VITE_API_URL || (window.location.port === '5173' ? 'http://localhost:8000' : (window.location.hostname === 'localhost' ? 'http://localhost:8000' : ''));
+const WS_URL = import.meta.env.VITE_WS_URL || (window.location.protocol === 'https:' ? `wss://${window.location.hostname || 'localhost'}:8000/ws/live` : `ws://${window.location.hostname || 'localhost'}:8000/ws/live`);
+
 export default function App() {
   const [activeStage, setActiveStage] = useState('IDLE');
   const [activeRules, setActiveRules] = useState([]);
@@ -26,7 +29,7 @@ export default function App() {
   useEffect(() => {
     const fetchInitialState = async () => {
       try {
-        const res = await fetch('/api/state');
+        const res = await fetch(`${API_BASE}/api/state`);
         if (res.ok) {
           const data = await res.json();
           if (data.active_rules) setActiveRules(data.active_rules);
@@ -52,11 +55,8 @@ export default function App() {
     let reconnectTimeout = null;
 
     const connectWebSocket = () => {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/live`;
-      
-      console.log(`[WS] Connecting to ${wsUrl}...`);
-      const ws = new WebSocket(wsUrl);
+      console.log(`[WS] Connecting to ${WS_URL}...`);
+      const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -73,6 +73,11 @@ export default function App() {
             setCurrentCycle(msg.cycle);
             setRecentCycles(prev => [msg.cycle, ...prev.slice(0, 39)]);
             if (msg.hardware_metrics) setHardwareMetrics(msg.hardware_metrics);
+          } else if (msg.type === 'CYCLE_UPDATED') {
+            setRecentCycles(prev => prev.map(c => c.cycle_id === msg.cycle.cycle_id ? msg.cycle : c));
+            if (currentCycle?.cycle_id === msg.cycle.cycle_id) {
+              setCurrentCycle(msg.cycle);
+            }
           } else if (msg.type === 'INITIAL_STATE') {
             if (msg.active_rules) setActiveRules(msg.active_rules);
             if (msg.recent_cycles) {
@@ -117,7 +122,7 @@ export default function App() {
   // API Callbacks
   const handleTriggerCycle = async (outcome) => {
     try {
-      const url = outcome ? `/api/simulate-cycle?outcome=${outcome}` : '/api/simulate-cycle';
+      const url = outcome ? `${API_BASE}/api/simulate-cycle?outcome=${outcome}` : `${API_BASE}/api/simulate-cycle`;
       const res = await fetch(url, { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
@@ -133,7 +138,7 @@ export default function App() {
 
   const handleToggleContinuousSimulation = async () => {
     try {
-      const res = await fetch('/api/toggle-simulation', { method: 'POST' });
+      const res = await fetch(`${API_BASE}/api/toggle-simulation`, { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         setSimulationRunning(data.simulation_running);
@@ -149,7 +154,7 @@ export default function App() {
 
   const handleRuleDeleted = async (ruleId) => {
     try {
-      const res = await fetch(`/api/copilot/rule/${ruleId}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/api/copilot/rule/${ruleId}`, { method: 'DELETE' });
       if (res.ok) {
         setActiveRules(prev => prev.filter(r => r.rule_id !== ruleId));
       }

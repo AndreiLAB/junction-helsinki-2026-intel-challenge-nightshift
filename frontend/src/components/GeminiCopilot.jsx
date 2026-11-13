@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, Mic, Camera, Send, Volume2, Trash2, Check, RefreshCw } from 'lucide-react';
 
+const API_BASE = import.meta.env.VITE_API_URL || (window.location.port === '5173' ? 'http://localhost:8000' : (window.location.hostname === 'localhost' ? 'http://localhost:8000' : ''));
+
 export default function GeminiCopilot({ activeRules, onRuleCreated, onRuleDeleted }) {
   const [instruction, setInstruction] = useState('');
   const [loading, setLoading] = useState(false);
@@ -116,7 +118,7 @@ export default function GeminiCopilot({ activeRules, onRuleCreated, onRuleDelete
     }
 
     try {
-      const res = await fetch('/api/copilot/rule', {
+      const res = await fetch(`${API_BASE}/api/copilot/rule`, {
         method: 'POST',
         body: formData,
       });

@@ -81,6 +81,7 @@ class SystemState:
                 active=True,
             )
         ]
+        self.active_anomaly_threshold: float = 0.55
         self.recent_cycles: List[Dict[str, Any]] = []
         self.current_pipeline_stage: str = "IDLE" # IDLE, PERCEIVE, DETECT, REASON, ACT, OPTIMIZE
         self.simulation_running: bool = False
@@ -136,6 +137,10 @@ class CycleIngestRequest(BaseModel):
     cpu_latency_ms: Optional[float] = 2.1
     raw_image_b64: Optional[str] = None
     heatmap_image_b64: Optional[str] = None
+
+class NemotronUpdateRequest(BaseModel):
+    nemotron_root_cause: str
+    adjusted_threshold: Optional[float] = None
 
 # Background continuous simulation loop
 async def continuous_simulator_loop():
@@ -408,10 +413,66 @@ async def health_check():
 async def get_full_state():
     return {
         "stage": state.current_pipeline_stage,
+        "active_anomaly_threshold": state.active_anomaly_threshold,
         "active_rules": [r.model_dump() for r in state.active_rules],
         "recent_cycles": state.recent_cycles,
         "hardware_metrics": state.hardware_metrics,
         "simulation_running": state.simulation_running,
+    }
+
+@app.get("/api/policy")
+async def get_active_policy():
+    """
+    Returns the current active sorting rules and anomaly threshold for the edge robot loop.
+    Polled asynchronously by Member 2/3 edge loop or received via /ws/live.
+    """
+    return {
+        "active_anomaly_threshold": state.active_anomaly_threshold,
+        "rules_count": len(state.active_rules),
+        "rules": [r.model_dump() for r in state.active_rules if getattr(r, 'active', True)],
+        "regrasp_range": [0.45, 0.65],
+        "openvino_acceleration": {
+            "npu_anomalib": "OpenVINO NPU Plugin (50 TOPS)",
+            "igpu_vla": "OpenVINO Xe3 FP16 (12 Cores)",
+            "cpu_control": "Intel TCC Real-Time Deterministic Thread",
+        },
+        "last_updated": time.strftime("%H:%M:%S"),
+    }
+
+@app.patch("/api/cycles/{brick_uuid}/nemotron")
+async def update_cycle_nemotron(brick_uuid: str, update: NemotronUpdateRequest):
+    """
+    Accepts updates from Cloud Nemotron 3.5 Super VL worker to annotate a cycle
+    with deeper multimodal root-cause analysis and optionally dynamically tune anomaly threshold.
+    Broadcasts the updated state over /ws/live.
+    """
+    target_id = f"CYC-{brick_uuid}" if not brick_uuid.startswith("CYC-") else brick_uuid
+    found_cycle = None
+    for cyc in state.recent_cycles:
+        if cyc.get("cycle_id") == target_id or cyc.get("cycle_id") == f"CYC-{brick_uuid}":
+            cyc["nemotron_reasoning"] = update.nemotron_root_cause
+            cyc["root_cause_reasoning"] = update.nemotron_root_cause
+            found_cycle = cyc
+            break
+
+    if not found_cycle:
+        raise HTTPException(status_code=404, detail=f"Cycle '{brick_uuid}' not found in recent cycles.")
+
+    if update.adjusted_threshold is not None:
+        state.active_anomaly_threshold = float(update.adjusted_threshold)
+        logger.info(f"Nemotron updated active anomaly threshold to {update.adjusted_threshold}")
+
+    await manager.broadcast({
+        "type": "CYCLE_UPDATED",
+        "cycle": found_cycle,
+        "active_anomaly_threshold": state.active_anomaly_threshold,
+    })
+
+    return {
+        "status": "success",
+        "cycle_id": target_id,
+        "nemotron_root_cause": update.nemotron_root_cause,
+        "active_anomaly_threshold": state.active_anomaly_threshold,
     }
 
 @app.post("/api/cycles")
@@ -544,11 +605,17 @@ async def create_copilot_rule(
     else:
         state.active_rules.insert(0, rule)
 
+    # Update active threshold if specified
+    if getattr(rule, "anomaly_threshold", None):
+        state.active_anomaly_threshold = float(rule.anomaly_threshold)
+        logger.info(f"Gemini Copilot updated active anomaly threshold to {rule.anomaly_threshold}")
+
     # Broadcast updated rules over WebSocket
     await manager.broadcast({
         "type": "RULE_CREATED",
         "rule": rule.model_dump(),
         "active_rules": [r.model_dump() for r in state.active_rules],
+        "active_anomaly_threshold": state.active_anomaly_threshold,
     })
 
     return {
