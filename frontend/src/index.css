@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#06080d] text-slate-100 font-sans antialiased selection:bg-intel-blue selection:text-white;
+  }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #090d14;
+}
+::-webkit-scrollbar-thumb {
+  background: #1b2434;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #0071C5;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.scanline {
+  background: linear-gradient(
+    to bottom,
+    rgba(255,255,255,0),
+    rgba(255,255,255,0) 50%,
+    rgba(0, 199, 253, 0.05) 50%,
+    rgba(0, 199, 253, 0.05)
+  );
+  background-size: 100% 3px;
+}
