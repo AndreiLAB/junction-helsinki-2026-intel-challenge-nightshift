@@ -64,7 +64,7 @@ export default function DualCameraFeed({ currentCycle }) {
             <div className="w-1.5 h-1.5 rounded-full bg-[#55dbb1] animate-pulse" />
             <div>
               <div className="text-[12px] font-medium text-[#b5c0ce] leading-tight font-mono">
-                CAM-01 // Top-View Workspace (Duplo Plates)
+                CAM-01 // Top-View Workspace (Duplo Plate &amp; GOOD/DEFECTIVE Bowls)
               </div>
               <div className="text-[10px] text-[#8e9bae] leading-tight mt-0.5">
                 RealSense D415 · 1080p / 60 fps
@@ -72,12 +72,12 @@ export default function DualCameraFeed({ currentCycle }) {
             </div>
           </div>
 
-          {/* Close-Up Inspection camera label & Switcher */}
+          {/* Inspection Camera label & Switcher */}
           <div className="flex items-center justify-between sm:justify-end space-x-3">
             <div className="flex items-center space-x-2">
               <div className="w-1.5 h-1.5 rounded-full bg-[#89b9ef]" />
               <div className="text-[12px] font-medium text-[#b5c0ce] font-mono">
-                CAM-02 // Close-Up Inspection (Anomalib v2.7.0 ROI)
+                CAM-02 // Inspection Camera (Plain Backdrop ROI)
               </div>
             </div>
 
@@ -134,14 +134,14 @@ export default function DualCameraFeed({ currentCycle }) {
               {/* Workspace Boundary */}
               <rect x="10" y="10" width="280" height="160" rx="8" stroke="#1e293b" strokeWidth="1" strokeDasharray="3 3" />
               
-              {/* Perfect Zone: Accept */}
+              {/* GOOD Bowl: Accept */}
               <circle cx="55" cy="50" r="28" fill="#15352e" stroke="#55dbb1" strokeWidth="1.2" />
-              <text x="55" y="48" textAnchor="middle" fill="#55dbb1" fontSize="7" fontFamily="monospace" fontWeight="600">PERFECT ZONE</text>
+              <text x="55" y="48" textAnchor="middle" fill="#55dbb1" fontSize="7.5" fontFamily="monospace" fontWeight="600">GOOD BOWL</text>
               <text x="55" y="58" textAnchor="middle" fill="#8e9bae" fontSize="6.5" fontFamily="monospace">Bowl #1</text>
 
-              {/* Defective Zone: Defective */}
+              {/* DEFECTIVE Bowl: Defective */}
               <circle cx="245" cy="50" r="28" fill="#38232c" stroke="#f28d95" strokeWidth="1.2" />
-              <text x="245" y="48" textAnchor="middle" fill="#f28d95" fontSize="7" fontFamily="monospace" fontWeight="600">DEFECTIVE ZONE</text>
+              <text x="245" y="48" textAnchor="middle" fill="#f28d95" fontSize="7.5" fontFamily="monospace" fontWeight="600">DEFECTIVE BOWL</text>
               <text x="245" y="58" textAnchor="middle" fill="#8e9bae" fontSize="6.5" fontFamily="monospace">Bowl #2</text>
 
               {/* Central Source Duplo Plate */}
@@ -169,7 +169,7 @@ export default function DualCameraFeed({ currentCycle }) {
           <div className="relative aspect-[409/218] w-full rounded-[6px] overflow-hidden border border-[#26313e] bg-[#070c1c] flex items-center justify-center">
             {/* Badges */}
             <div className="absolute left-2.5 top-2.5 bg-[#121922]/90 border border-[#26313e]/60 px-2 py-0.5 rounded-[4px] z-10">
-              <span className="text-[10px] font-mono font-medium text-[#b5c0ce]">CAM 02 // CLOSE-UP ROI</span>
+              <span className="text-[10px] font-mono font-medium text-[#b5c0ce]">CAM 02 // BACKDROP ROI</span>
             </div>
             
             <div className={`absolute right-2.5 bottom-2.5 px-2.5 py-0.5 rounded-[4px] z-10 border ${
@@ -265,7 +265,7 @@ export default function DualCameraFeed({ currentCycle }) {
             <span>SO-101 leader / follower</span>
             <span>•</span>
             <span className={`font-medium ${isDefective ? 'text-[#f28d95]' : 'text-[#55dbb1]'}`}>
-              {isDefective ? 'Defective Zone (Bowl 2)' : isRegrasp ? 'Source Duplo Plate (Re-inspect)' : 'Perfect Zone (Bowl 1)'}
+              {isDefective ? 'DEFECTIVE Bowl' : isRegrasp ? 'Source Duplo Plate (Re-inspect)' : 'GOOD Bowl'}
             </span>
           </div>
           <div className="flex items-center space-x-3">
