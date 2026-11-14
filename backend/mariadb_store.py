@@ -56,6 +56,7 @@ DEFAULT_DATABASE = "junction_physical_ai"
 # Module-level state for MariaDB health and 200-entry in-memory vector store
 _memory_records: list[dict[str, Any]] = []
 _memory_policy_history: list[dict[str, Any]] = []
+_memory_benchmarks: list[dict[str, Any]] = []
 _memory_lock = threading.Lock()
 _db_lock = threading.Lock()
 _db_live: bool = False
@@ -94,14 +95,27 @@ CREATE TABLE IF NOT EXISTS inspection_cycles (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     cycle_id VARCHAR(64) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    run_id VARCHAR(64),
+    brick_idx INT,
     color VARCHAR(32),
     defect_label VARCHAR(128),
+    verdict VARCHAR(32),
     anomaly_score FLOAT,
+    t_low FLOAT DEFAULT 0.35,
+    t_high FLOAT DEFAULT 0.60,
     action VARCHAR(32),
+    instruction VARCHAR(255),
+    cell_state VARCHAR(32),
+    views_json TEXT,
+    model VARCHAR(64),
+    precision_mode VARCHAR(16),
+    device VARCHAR(16),
     npu_ms FLOAT,
     igpu_ms FLOAT,
     cpu_ms FLOAT,
     total_ms FLOAT,
+    cycle_s FLOAT,
+    evidence VARCHAR(16) DEFAULT 'MOCK',
     raw_url MEDIUMTEXT,
     composite_url MEDIUMTEXT,
     nemotron_reasoning TEXT,
@@ -116,14 +130,27 @@ CREATE TABLE IF NOT EXISTS inspection_cycles (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     cycle_id VARCHAR(64) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    run_id VARCHAR(64),
+    brick_idx INT,
     color VARCHAR(32),
     defect_label VARCHAR(128),
+    verdict VARCHAR(32),
     anomaly_score FLOAT,
+    t_low FLOAT DEFAULT 0.35,
+    t_high FLOAT DEFAULT 0.60,
     action VARCHAR(32),
+    instruction VARCHAR(255),
+    cell_state VARCHAR(32),
+    views_json TEXT,
+    model VARCHAR(64),
+    precision_mode VARCHAR(16),
+    device VARCHAR(16),
     npu_ms FLOAT,
     igpu_ms FLOAT,
     cpu_ms FLOAT,
     total_ms FLOAT,
+    cycle_s FLOAT,
+    evidence VARCHAR(16) DEFAULT 'MOCK',
     raw_url MEDIUMTEXT,
     composite_url MEDIUMTEXT,
     nemotron_reasoning TEXT,
@@ -133,8 +160,25 @@ CREATE TABLE IF NOT EXISTS inspection_cycles (
 ) ENGINE=InnoDB
 """
 
+_ALTER_CYCLES_TABLE_SQL = """
+ALTER TABLE inspection_cycles
+    ADD COLUMN IF NOT EXISTS run_id VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS brick_idx INT,
+    ADD COLUMN IF NOT EXISTS verdict VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS t_low FLOAT DEFAULT 0.35,
+    ADD COLUMN IF NOT EXISTS t_high FLOAT DEFAULT 0.60,
+    ADD COLUMN IF NOT EXISTS instruction VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS cell_state VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS views_json TEXT,
+    ADD COLUMN IF NOT EXISTS model VARCHAR(64),
+    ADD COLUMN IF NOT EXISTS precision_mode VARCHAR(16),
+    ADD COLUMN IF NOT EXISTS device VARCHAR(16),
+    ADD COLUMN IF NOT EXISTS cycle_s FLOAT,
+    ADD COLUMN IF NOT EXISTS evidence VARCHAR(16) DEFAULT 'MOCK'
+"""
+
 _FIND_SIMILAR_SQL = (
-    "SELECT cycle_id, color, defect_label, action, anomaly_score, "
+    "SELECT cycle_id, color, defect_label, verdict, action, anomaly_score, evidence, "
     "VEC_DISTANCE_COSINE(embedding, VEC_FromText(%s)) AS dist "
     "FROM inspection_cycles "
     "WHERE cycle_id != %s "
@@ -151,28 +195,105 @@ _FETCH_CYCLE_EMBEDDING_SQL = (
 
 _UPSERT_CYCLE_SQL = """
 INSERT INTO inspection_cycles (
-    cycle_id, color, defect_label, anomaly_score, action,
-    npu_ms, igpu_ms, cpu_ms, total_ms,
+    cycle_id, run_id, brick_idx, color, defect_label, verdict,
+    anomaly_score, t_low, t_high, action, instruction, cell_state,
+    views_json, model, precision_mode, device,
+    npu_ms, igpu_ms, cpu_ms, total_ms, cycle_s, evidence,
     raw_url, composite_url, nemotron_reasoning, embedding
 ) VALUES (
-    %s, %s, %s, %s, %s,
+    %s, %s, %s, %s, %s, %s,
+    %s, %s, %s, %s, %s, %s,
     %s, %s, %s, %s,
+    %s, %s, %s, %s, %s, %s,
     %s, %s, %s, VEC_FromText(%s)
 )
 ON DUPLICATE KEY UPDATE
+    run_id = VALUES(run_id),
+    brick_idx = VALUES(brick_idx),
     color = VALUES(color),
     defect_label = VALUES(defect_label),
+    verdict = VALUES(verdict),
     anomaly_score = VALUES(anomaly_score),
+    t_low = VALUES(t_low),
+    t_high = VALUES(t_high),
     action = VALUES(action),
+    instruction = VALUES(instruction),
+    cell_state = VALUES(cell_state),
+    views_json = VALUES(views_json),
+    model = VALUES(model),
+    precision_mode = VALUES(precision_mode),
+    device = VALUES(device),
     npu_ms = VALUES(npu_ms),
     igpu_ms = VALUES(igpu_ms),
     cpu_ms = VALUES(cpu_ms),
     total_ms = VALUES(total_ms),
+    cycle_s = VALUES(cycle_s),
+    evidence = VALUES(evidence),
     raw_url = VALUES(raw_url),
     composite_url = VALUES(composite_url),
     nemotron_reasoning = VALUES(nemotron_reasoning),
     embedding = VALUES(embedding)
 """
+
+_CREATE_BENCHMARKS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS openvino_benchmarks (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    bench_key VARCHAR(160) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    model VARCHAR(64) NOT NULL,
+    device VARCHAR(32) NOT NULL,
+    precision_mode VARCHAR(16) NOT NULL,
+    hint VARCHAR(32) DEFAULT 'LATENCY',
+    latency_ms_p50 FLOAT DEFAULT 0,
+    latency_ms_p95 FLOAT DEFAULT 0,
+    fps FLOAT DEFAULT 0,
+    compile_s FLOAT DEFAULT 0,
+    cached_compile_s FLOAT DEFAULT 0,
+    size_mb FLOAT DEFAULT 0,
+    quality_metric VARCHAR(32) DEFAULT 'image_F1',
+    quality FLOAT DEFAULT 0,
+    evidence VARCHAR(16) DEFAULT 'MOCK',
+    notes TEXT,
+    UNIQUE KEY uq_bench_key (bench_key)
+) ENGINE=InnoDB
+"""
+
+_UPSERT_BENCHMARK_SQL = """
+INSERT INTO openvino_benchmarks (
+    bench_key, model, device, precision_mode, hint,
+    latency_ms_p50, latency_ms_p95, fps, compile_s, cached_compile_s,
+    size_mb, quality_metric, quality, evidence, notes
+) VALUES (
+    %s, %s, %s, %s, %s,
+    %s, %s, %s, %s, %s,
+    %s, %s, %s, %s, %s
+)
+ON DUPLICATE KEY UPDATE
+    model = VALUES(model),
+    device = VALUES(device),
+    precision_mode = VALUES(precision_mode),
+    hint = VALUES(hint),
+    latency_ms_p50 = VALUES(latency_ms_p50),
+    latency_ms_p95 = VALUES(latency_ms_p95),
+    fps = VALUES(fps),
+    compile_s = VALUES(compile_s),
+    cached_compile_s = VALUES(cached_compile_s),
+    size_mb = VALUES(size_mb),
+    quality_metric = VALUES(quality_metric),
+    quality = VALUES(quality),
+    evidence = VALUES(evidence),
+    notes = VALUES(notes)
+"""
+
+_QUERY_BENCHMARKS_SQL = (
+    "SELECT model, device, precision_mode AS `precision`, hint, "
+    "latency_ms_p50, latency_ms_p95, fps, compile_s, cached_compile_s, "
+    "size_mb, quality_metric, quality, evidence, notes, "
+    "DATE_FORMAT(updated_at, '%%H:%%i:%%s') AS updated_at "
+    "FROM openvino_benchmarks "
+    "ORDER BY FIELD(evidence, 'REAL', 'REPLAY', 'MOCK'), model ASC, FIELD(device, 'NPU', 'GPU', 'CPU'), latency_ms_p50 ASC "
+    "LIMIT %s"
+)
 
 _CREATE_POLICIES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS sorting_policies (
@@ -782,13 +903,17 @@ def _upsert_memory_record(
     action: str,
     anomaly_score: float,
     embedding: list[float],
+    verdict: str = "GOOD",
+    evidence: str = "MOCK",
 ) -> None:
     record = {
         "cycle_id": cycle_id,
         "color": color,
         "defect_label": defect_label,
+        "verdict": verdict,
         "action": action,
         "anomaly_score": float(anomaly_score),
+        "evidence": evidence,
         "embedding": list(embedding),
     }
     with _memory_lock:
@@ -831,9 +956,11 @@ def _memory_find_similar(
                 "cycle_id": str(rec["cycle_id"]),
                 "color": str(rec["color"]),
                 "defect_label": str(rec["defect_label"]),
+                "verdict": str(rec.get("verdict") or ("DEFECT" if rec["action"] == "DEFECTIVE_BOWL" else ("UNCERTAIN" if rec["action"] == "REGRASP_TRIGGERED" else "GOOD"))),
                 "action": str(rec["action"]),
                 "similarity_pct": float(sim_pct),
                 "anomaly_score": float(rec["anomaly_score"]),
+                "evidence": str(rec.get("evidence") or "MOCK"),
             }
         )
     return results
@@ -875,7 +1002,8 @@ def _open_pymysql_connection(cfg: dict[str, Any], include_db: bool = True) -> An
 def _connect_and_ensure_schema(cfg: dict[str, Any]) -> Any:
     """
     Opens a PyMySQL connection to MariaDB 11.7+ and ensures `inspection_cycles`
-    with `VECTOR(512)` and `VECTOR INDEX` (`M=8 DISTANCE=cosine`) exists.
+    with `VECTOR(512)` and `VECTOR INDEX` (`M=8 DISTANCE=cosine`), `sorting_policies`
+    (`WITH SYSTEM VERSIONING`), and `openvino_benchmarks` exist.
     """
     global _schema_initialized_key
     target_key = (str(cfg["host"]), int(cfg["port"]), str(cfg["database"]))
@@ -913,6 +1041,12 @@ def _connect_and_ensure_schema(cfg: dict[str, Any]) -> Any:
                             cur.execute(_CREATE_TABLE_FALLBACK_SQL)
                         elif ddl_code != 1050:
                             raise
+                else:
+                    try:
+                        cur.execute(_ALTER_CYCLES_TABLE_SQL)
+                    except Exception as alter_exc:
+                        logger.debug("Optional inspection_cycles column migration skipped: %s", type(alter_exc).__name__)
+
                 cur.execute("SHOW TABLES LIKE 'sorting_policies'")
                 if not cur.fetchone():
                     try:
@@ -920,6 +1054,15 @@ def _connect_and_ensure_schema(cfg: dict[str, Any]) -> Any:
                     except Exception as pol_exc:
                         pol_code = pol_exc.args[0] if getattr(pol_exc, "args", None) else None
                         if pol_code != 1050:
+                            raise
+
+                cur.execute("SHOW TABLES LIKE 'openvino_benchmarks'")
+                if not cur.fetchone():
+                    try:
+                        cur.execute(_CREATE_BENCHMARKS_TABLE_SQL)
+                    except Exception as bench_exc:
+                        bench_code = bench_exc.args[0] if getattr(bench_exc, "args", None) else None
+                        if bench_code != 1050:
                             raise
             with _db_lock:
                 _schema_initialized_key = target_key
@@ -936,14 +1079,21 @@ def _format_db_neighbor_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         dist_raw = row.get("dist")
         dist = float(dist_raw) if dist_raw is not None else 1.0
         similarity_pct = round(max(0.0, min(100.0, (1.0 - dist) * 100.0)), 1)
+        action_val = str(row.get("action") or "PERFECT_BOWL")
+        verdict_val = str(
+            row.get("verdict")
+            or ("DEFECT" if action_val == "DEFECTIVE_BOWL" else ("UNCERTAIN" if action_val == "REGRASP_TRIGGERED" else "GOOD"))
+        )
         matches.append(
             {
                 "cycle_id": str(row.get("cycle_id") or ""),
                 "color": str(row.get("color") or "blue"),
                 "defect_label": str(row.get("defect_label") or "None (Pristine)"),
-                "action": str(row.get("action") or "PERFECT_BOWL"),
+                "verdict": verdict_val,
+                "action": action_val,
                 "similarity_pct": float(similarity_pct),
                 "anomaly_score": float(row.get("anomaly_score") if row.get("anomaly_score") is not None else 0.0),
+                "evidence": str(row.get("evidence") or "MOCK"),
             }
         )
     return matches
@@ -969,14 +1119,27 @@ def _db_record_and_query_sync(
                 _UPSERT_CYCLE_SQL,
                 (
                     row_params["cycle_id"],
+                    row_params["run_id"],
+                    row_params["brick_idx"],
                     row_params["color"],
                     row_params["defect_label"],
+                    row_params["verdict"],
                     row_params["anomaly_score"],
+                    row_params["t_low"],
+                    row_params["t_high"],
                     row_params["action"],
+                    row_params["instruction"],
+                    row_params["cell_state"],
+                    row_params["views_json"],
+                    row_params["model"],
+                    row_params["precision_mode"],
+                    row_params["device"],
                     row_params["npu_ms"],
                     row_params["igpu_ms"],
                     row_params["cpu_ms"],
                     row_params["total_ms"],
+                    row_params["cycle_s"],
+                    row_params["evidence"],
                     row_params["raw_url"],
                     row_params["composite_url"],
                     row_params["nemotron_reasoning"],
@@ -1047,6 +1210,11 @@ async def record_cycle_and_find_similar(
     color = str(cycle.get("color") or "blue")[:32]
     defect_label = str(cycle.get("defect_label") or "None (Pristine)")[:128]
     action = str(cycle.get("action") or "PERFECT_BOWL")[:32]
+    verdict = str(
+        cycle.get("verdict")
+        or ("DEFECT" if action == "DEFECTIVE_BOWL" else ("UNCERTAIN" if action == "REGRASP_TRIGGERED" else "GOOD"))
+    )[:32]
+    evidence = str(cycle.get("evidence") or "MOCK").strip().upper()[:16] or "MOCK"
 
     try:
         anomaly_score = float(cycle.get("anomaly_score") if cycle.get("anomaly_score") is not None else 0.0)
@@ -1078,6 +1246,8 @@ async def record_cycle_and_find_similar(
         action=action,
         anomaly_score=anomaly_score,
         embedding=vec_512,
+        verdict=verdict,
+        evidence=evidence,
     )
 
     latencies = cycle.get("latencies")
@@ -1107,16 +1277,43 @@ async def record_cycle_and_find_similar(
         round(npu_ms + igpu_ms + cpu_ms, 2),
     )
 
+    brick_idx_val: Optional[int] = None
+    if cycle.get("brick_idx") is not None:
+        try:
+            brick_idx_val = int(cycle["brick_idx"])
+        except (TypeError, ValueError):
+            brick_idx_val = None
+
+    cycle_s_val: Optional[float] = None
+    if cycle.get("cycle_s") is not None:
+        cycle_s_val = _safe_float(cycle.get("cycle_s"), 0.0)
+
+    views_raw = cycle.get("views")
+    views_json_str = json.dumps(views_raw) if isinstance(views_raw, list) else "[]"
+
     row_params = {
         "cycle_id": cycle_id,
+        "run_id": str(cycle.get("run_id") or "")[:64] or None,
+        "brick_idx": brick_idx_val,
         "color": color,
         "defect_label": defect_label,
+        "verdict": verdict,
         "anomaly_score": anomaly_score,
+        "t_low": _safe_float(cycle.get("t_low"), 0.35),
+        "t_high": _safe_float(cycle.get("t_high"), 0.60),
         "action": action,
+        "instruction": str(cycle.get("instruction") or "")[:255] or None,
+        "cell_state": str(cycle.get("cell_state") or "")[:32] or None,
+        "views_json": views_json_str,
+        "model": str(cycle.get("model") or "")[:64] or None,
+        "precision_mode": str(cycle.get("precision") or "")[:16] or None,
+        "device": str(cycle.get("device") or "")[:16] or None,
         "npu_ms": npu_ms,
         "igpu_ms": igpu_ms,
         "cpu_ms": cpu_ms,
         "total_ms": total_ms,
+        "cycle_s": cycle_s_val,
+        "evidence": evidence,
         "raw_url": str(cycle.get("raw_url") or ""),
         "composite_url": str(cycle.get("composite_url") or cycle.get("heatmap_url") or ""),
         "nemotron_reasoning": str(cycle.get("nemotron_reasoning") or cycle.get("root_cause_reasoning") or ""),
@@ -1351,6 +1548,194 @@ async def get_policy_history(limit: int = 50) -> dict[str, Any]:
         "feature": "In-memory temporal policy log",
         "count": len(fallback_rows),
         "history": fallback_rows,
+    }
+
+
+def _normalize_benchmark_entry(raw: dict[str, Any]) -> dict[str, Any]:
+    def _f(val: Any, default: float = 0.0) -> float:
+        try:
+            v = float(val) if val is not None else default
+            return round(v, 4) if math.isfinite(v) else default
+        except (TypeError, ValueError):
+            return default
+
+    model = str(raw.get("model") or "patchcore_256").strip()[:64] or "patchcore_256"
+    device = str(raw.get("device") or "NPU").strip().upper()[:32] or "NPU"
+    precision = str(raw.get("precision") or raw.get("precision_mode") or "FP16").strip().upper()[:16] or "FP16"
+    hint = str(raw.get("hint") or "LATENCY").strip().upper()[:32] or "LATENCY"
+    ev_raw = str(raw.get("evidence") or "MOCK").strip().upper()
+    evidence = ev_raw if ev_raw in ("REAL", "REPLAY", "MOCK") else "MOCK"
+
+    return {
+        "bench_key": f"{model}|{device}|{precision}|{hint}"[:160],
+        "model": model,
+        "device": device,
+        "precision": precision,
+        "hint": hint,
+        "latency_ms_p50": _f(raw.get("latency_ms_p50"), 0.0),
+        "latency_ms_p95": _f(raw.get("latency_ms_p95"), 0.0),
+        "fps": _f(raw.get("fps"), 0.0),
+        "compile_s": _f(raw.get("compile_s"), 0.0),
+        "cached_compile_s": _f(raw.get("cached_compile_s"), 0.0),
+        "size_mb": _f(raw.get("size_mb"), 0.0),
+        "quality_metric": str(raw.get("quality_metric") or "image_F1").strip()[:32] or "image_F1",
+        "quality": _f(raw.get("quality"), 0.0),
+        "evidence": evidence,
+        "notes": str(raw.get("notes") or "").strip()[:500] or None,
+    }
+
+
+def _upsert_memory_benchmark(entry: dict[str, Any]) -> None:
+    import datetime
+
+    stamped = {
+        **entry,
+        "updated_at": datetime.datetime.now().strftime("%H:%M:%S"),
+    }
+    with _memory_lock:
+        for idx, existing in enumerate(_memory_benchmarks):
+            if existing.get("bench_key") == entry["bench_key"]:
+                _memory_benchmarks.pop(idx)
+                break
+        _memory_benchmarks.insert(0, stamped)
+        if len(_memory_benchmarks) > MEMORY_CAP:
+            del _memory_benchmarks[MEMORY_CAP:]
+
+
+def _db_upsert_benchmarks_sync(cfg: dict[str, Any], entries: list[dict[str, Any]]) -> None:
+    conn = _connect_and_ensure_schema(cfg)
+    try:
+        with conn.cursor() as cur:
+            for item in entries:
+                cur.execute(
+                    _UPSERT_BENCHMARK_SQL,
+                    (
+                        item["bench_key"],
+                        item["model"],
+                        item["device"],
+                        item["precision"],
+                        item["hint"],
+                        item["latency_ms_p50"],
+                        item["latency_ms_p95"],
+                        item["fps"],
+                        item["compile_s"],
+                        item["cached_compile_s"],
+                        item["size_mb"],
+                        item["quality_metric"],
+                        item["quality"],
+                        item["evidence"],
+                        item["notes"],
+                    ),
+                )
+    finally:
+        conn.close()
+
+
+def _db_query_benchmarks_sync(cfg: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    conn = _connect_and_ensure_schema(cfg)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_QUERY_BENCHMARKS_SQL, (max(1, min(int(limit), 200)),))
+            rows = cur.fetchall() or []
+            out: list[dict[str, Any]] = []
+            for r in rows:
+                out.append(
+                    {
+                        "model": str(r.get("model") or ""),
+                        "device": str(r.get("device") or ""),
+                        "precision": str(r.get("precision") or ""),
+                        "hint": str(r.get("hint") or "LATENCY"),
+                        "latency_ms_p50": round(float(r.get("latency_ms_p50") or 0.0), 2),
+                        "latency_ms_p95": round(float(r.get("latency_ms_p95") or 0.0), 2),
+                        "fps": round(float(r.get("fps") or 0.0), 2),
+                        "compile_s": round(float(r.get("compile_s") or 0.0), 3),
+                        "cached_compile_s": round(float(r.get("cached_compile_s") or 0.0), 3),
+                        "size_mb": round(float(r.get("size_mb") or 0.0), 2),
+                        "quality_metric": str(r.get("quality_metric") or "image_F1"),
+                        "quality": round(float(r.get("quality") or 0.0), 4),
+                        "evidence": str(r.get("evidence") or "MOCK"),
+                        "notes": r.get("notes"),
+                        "updated_at": r.get("updated_at"),
+                    }
+                )
+            return out
+    finally:
+        conn.close()
+
+
+async def record_benchmarks(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Normalizes and persists OpenVINO device benchmark records (`~/duplo-cell/reports/bench/*.json`)
+    into MariaDB `openvino_benchmarks` + in-memory fallback.
+    """
+    global _db_live
+
+    normalized = [_normalize_benchmark_entry(r) for r in records if isinstance(r, dict)]
+    if not normalized:
+        return []
+
+    for item in normalized:
+        _upsert_memory_benchmark(item)
+
+    cfg = _parse_db_config()
+    if cfg is not None and _PYMYSQL_AVAILABLE:
+        try:
+            await asyncio.to_thread(_db_upsert_benchmarks_sync, cfg, normalized)
+            _db_live = True
+        except Exception as exc:
+            _db_live = False
+            logger.warning(
+                "MariaDB benchmark upsert failed (%s); stored in memory.",
+                type(exc).__name__,
+            )
+
+    return [{k: v for k, v in item.items() if k != "bench_key"} for item in normalized]
+
+
+async def get_benchmarks(limit: int = 50) -> dict[str, Any]:
+    """
+    Returns OpenVINO benchmark records ordered by evidence (`REAL` -> `REPLAY` -> `MOCK`),
+    model, and device (`NPU` -> `GPU` -> `CPU`).
+    """
+    global _db_live
+
+    clamped_limit = max(1, min(int(limit), 200))
+    cfg = _parse_db_config()
+    if cfg is not None and _PYMYSQL_AVAILABLE:
+        try:
+            rows = await asyncio.to_thread(_db_query_benchmarks_sync, cfg, clamped_limit)
+            _db_live = True
+            return {
+                "provider": "LIVE",
+                "count": len(rows),
+                "benchmarks": rows,
+            }
+        except Exception as exc:
+            _db_live = False
+            logger.warning(
+                "MariaDB benchmark query failed (%s); using in-memory fallback.",
+                type(exc).__name__,
+            )
+
+    ev_order = {"REAL": 0, "REPLAY": 1, "MOCK": 2}
+    dev_order = {"NPU": 0, "GPU": 1, "IGPU": 1, "CPU": 2}
+    with _memory_lock:
+        fallback_rows = [
+            {k: v for k, v in item.items() if k != "bench_key"}
+            for item in _memory_benchmarks
+        ]
+    fallback_rows.sort(
+        key=lambda r: (
+            ev_order.get(str(r.get("evidence") or "MOCK"), 3),
+            str(r.get("model") or ""),
+            dev_order.get(str(r.get("device") or ""), 3),
+            float(r.get("latency_ms_p50") or 0.0),
+        )
+    )
+    return {
+        "provider": "FALLBACK",
+        "count": len(fallback_rows[:clamped_limit]),
+        "benchmarks": fallback_rows[:clamped_limit],
     }
 
 

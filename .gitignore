@@ -27,6 +27,10 @@ backend/.env
 *.log
 ~$*
 .mariadb/
+runs/
+backend/runs/
+.fake_duplo_cell/
+backend/.fake_duplo_cell/
 team_repo_temp/
 physical_ai_studio_ref/
 anomalib_ref/

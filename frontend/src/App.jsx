@@ -22,8 +22,11 @@ const WS_URL = import.meta.env.VITE_WS_URL || (window.location.protocol === 'htt
 
 export default function App() {
   const [activeStage, setActiveStage] = useState('IDLE');
+  const [cellState, setCellState] = useState('HOME');
+  const [policyBounds, setPolicyBounds] = useState({ t_low: 0.35, t_high: 0.60, anomaly_threshold: 0.55 });
   const [activeRules, setActiveRules] = useState([]);
   const [recentCycles, setRecentCycles] = useState([]);
+  const [benchmarks, setBenchmarks] = useState([]);
   const [currentCycle, setCurrentCycle] = useState(null);
   const [hardwareMetrics, setHardwareMetrics] = useState(null);
   const [simulationRunning, setSimulationRunning] = useState(false);
@@ -36,6 +39,21 @@ export default function App() {
 
   const wsRef = useRef(null);
 
+  // OpenVINO device benchmark records (/api/benchmarks)
+  const fetchBenchmarks = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/benchmarks?limit=30`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.benchmarks)) {
+          setBenchmarks(data.benchmarks);
+        }
+      }
+    } catch (err) {
+      console.warn("Could not fetch /api/benchmarks:", err);
+    }
+  }, []);
+
   // MariaDB WITH SYSTEM VERSIONING temporal policy history (/api/policies/history)
   const fetchPolicyHistory = useCallback(async () => {
     try {
@@ -47,6 +65,13 @@ export default function App() {
           provider: data.provider || 'FALLBACK',
           activeThreshold: data.active_anomaly_threshold ?? 0.55,
         });
+        if (data.t_low !== undefined || data.t_high !== undefined) {
+          setPolicyBounds(prev => ({
+            t_low: data.t_low ?? prev.t_low,
+            t_high: data.t_high ?? prev.t_high,
+            anomaly_threshold: data.active_anomaly_threshold ?? prev.anomaly_threshold,
+          }));
+        }
       }
     } catch (err) {
       console.warn("Could not fetch /api/policies/history:", err);
@@ -69,9 +94,10 @@ export default function App() {
   useEffect(() => {
     fetchHealth();
     fetchPolicyHistory();
+    fetchBenchmarks();
     const intervalId = setInterval(fetchHealth, 10000);
     return () => clearInterval(intervalId);
-  }, [fetchHealth, fetchPolicyHistory]);
+  }, [fetchHealth, fetchPolicyHistory, fetchBenchmarks]);
 
   // Initial state fetch from REST API
   useEffect(() => {
@@ -87,8 +113,17 @@ export default function App() {
               setCurrentCycle(data.recent_cycles[0]);
             }
           }
+          if (Array.isArray(data.benchmarks)) setBenchmarks(data.benchmarks);
           if (data.hardware_metrics) setHardwareMetrics(data.hardware_metrics);
           if (data.stage) setActiveStage(data.stage);
+          if (data.cell_state) setCellState(data.cell_state);
+          if (data.t_low !== undefined || data.t_high !== undefined || data.active_anomaly_threshold !== undefined) {
+            setPolicyBounds(prev => ({
+              t_low: data.t_low ?? prev.t_low,
+              t_high: data.t_high ?? prev.t_high,
+              anomaly_threshold: data.active_anomaly_threshold ?? prev.anomaly_threshold,
+            }));
+          }
           if (data.simulation_running !== undefined) setSimulationRunning(data.simulation_running);
         }
       } catch (err) {
@@ -116,29 +151,56 @@ export default function App() {
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'STAGE_CHANGE') {
-            setActiveStage(msg.stage);
+            if (msg.stage) setActiveStage(msg.stage);
+            if (msg.cell_state) setCellState(msg.cell_state);
           } else if (msg.type === 'NEW_CYCLE') {
             setCurrentCycle(msg.cycle);
             setRecentCycles(prev => [msg.cycle, ...prev.filter(c => c.cycle_id !== msg.cycle.cycle_id)].slice(0, 40));
             if (msg.hardware_metrics) setHardwareMetrics(msg.hardware_metrics);
+            if (msg.cell_state || msg.cycle?.cell_state) setCellState(msg.cell_state || msg.cycle.cell_state);
+            if (msg.t_low !== undefined || msg.t_high !== undefined) {
+              setPolicyBounds(prev => ({
+                ...prev,
+                t_low: msg.t_low ?? prev.t_low,
+                t_high: msg.t_high ?? prev.t_high,
+              }));
+            }
             fetchHealth();
           } else if (msg.type === 'CYCLE_UPDATED') {
             setRecentCycles(prev => prev.map(c => c.cycle_id === msg.cycle.cycle_id ? msg.cycle : c));
             setCurrentCycle(prev => prev?.cycle_id === msg.cycle.cycle_id ? msg.cycle : prev);
             setSelectedCycle(prev => prev?.cycle_id === msg.cycle.cycle_id ? msg.cycle : prev);
+            if (msg.active_anomaly_threshold !== undefined) {
+              setPolicyBounds(prev => ({ ...prev, anomaly_threshold: msg.active_anomaly_threshold }));
+            }
             fetchHealth();
             fetchPolicyHistory();
+          } else if (msg.type === 'BENCHMARKS_UPDATED') {
+            if (Array.isArray(msg.benchmarks)) setBenchmarks(msg.benchmarks);
+            if (msg.hardware_metrics) setHardwareMetrics(msg.hardware_metrics);
           } else if (msg.type === 'INITIAL_STATE') {
             if (msg.active_rules) setActiveRules(msg.active_rules);
             if (msg.recent_cycles) {
               setRecentCycles(msg.recent_cycles);
               if (msg.recent_cycles.length > 0) setCurrentCycle(msg.recent_cycles[0]);
             }
+            if (Array.isArray(msg.benchmarks)) setBenchmarks(msg.benchmarks);
             if (msg.hardware_metrics) setHardwareMetrics(msg.hardware_metrics);
             if (msg.stage) setActiveStage(msg.stage);
+            if (msg.cell_state) setCellState(msg.cell_state);
+            if (msg.t_low !== undefined || msg.t_high !== undefined || msg.active_anomaly_threshold !== undefined) {
+              setPolicyBounds(prev => ({
+                t_low: msg.t_low ?? prev.t_low,
+                t_high: msg.t_high ?? prev.t_high,
+                anomaly_threshold: msg.active_anomaly_threshold ?? prev.anomaly_threshold,
+              }));
+            }
             if (msg.simulation_running !== undefined) setSimulationRunning(msg.simulation_running);
           } else if (msg.type === 'RULE_CREATED') {
             if (msg.active_rules) setActiveRules(msg.active_rules);
+            if (msg.active_anomaly_threshold !== undefined) {
+              setPolicyBounds(prev => ({ ...prev, anomaly_threshold: msg.active_anomaly_threshold }));
+            }
             fetchPolicyHistory();
           } else if (msg.type === 'RULE_DELETED') {
             if (msg.active_rules) setActiveRules(msg.active_rules);
@@ -325,23 +387,34 @@ export default function App() {
           </div>
 
           {/* Performance Overview (4 Stat Cards) */}
-          <PerformanceOverview cycles={recentCycles} />
+          <PerformanceOverview cycles={recentCycles} hardwareMetrics={hardwareMetrics} />
 
           {/* Closed-Loop Autonomous Pipeline Bar */}
-          <ClosedLoopPipeline activeStage={activeStage} />
+          <ClosedLoopPipeline
+            activeStage={activeStage}
+            cellState={cellState}
+            currentCycle={currentCycle}
+          />
 
           {/* Grid Row 1: Live Inspection & Edge Telemetry */}
           {(activeTab === 'overview' || activeTab === 'inspection' || activeTab === 'hardware') && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
               {(activeTab === 'overview' || activeTab === 'inspection') && (
                 <div className={activeTab === 'inspection' ? 'lg:col-span-12' : 'lg:col-span-7 xl:col-span-8'}>
-                  <DualCameraFeed currentCycle={currentCycle} />
+                  <DualCameraFeed
+                    currentCycle={currentCycle}
+                    cellState={cellState}
+                    policyBounds={policyBounds}
+                  />
                 </div>
               )}
               {(activeTab === 'overview' || activeTab === 'hardware') && (
                 <div className={activeTab === 'hardware' ? 'lg:col-span-12' : 'lg:col-span-5 xl:col-span-4'}>
                   <IntelTelemetry
                     metrics={hardwareMetrics}
+                    benchmarks={benchmarks}
+                    currentCycle={currentCycle}
+                    expanded={activeTab === 'hardware'}
                     simulationRunning={simulationRunning}
                     onTriggerCycle={handleTriggerCycle}
                     onToggleContinuousSimulation={handleToggleContinuousSimulation}
@@ -410,7 +483,11 @@ export default function App() {
 
       {/* Inspection Modal */}
       {selectedCycle && (
-        <CycleModal cycle={selectedCycle} onClose={() => setSelectedCycle(null)} />
+        <CycleModal
+          cycle={selectedCycle}
+          policyBounds={policyBounds}
+          onClose={() => setSelectedCycle(null)}
+        />
       )}
     </div>
   );
