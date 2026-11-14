@@ -85,7 +85,7 @@ export default function CycleModal({ cycle, onClose }) {
 
             <div className="text-[12px] text-[#edf2f7] leading-relaxed bg-[#18212c]/40 p-2.5 rounded-[4px] border border-[#26313e]/60">
               <span className="text-[#89b9ef] font-semibold mr-1.5">Nemotron Reasoning:</span>
-              "{cycle.nemotron_reasoning}"
+              "{cycle.nemotron_reasoning || cycle.root_cause_reasoning || 'Pristine topology verified.'}"
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono text-[11px]">
@@ -102,7 +102,7 @@ export default function CycleModal({ cycle, onClose }) {
               <div className="bg-[#18212c] p-2 rounded-[4px]">
                 <span className="text-[#8e9bae] text-[9.5px] block">Destination</span>
                 <span className="font-semibold text-[#b5c0ce]">
-                  {isDefective ? 'Bowl #2 (Reject)' : isRegrasp ? 'Turntable' : 'Bowl #1 (Accept)'}
+                  {isDefective ? 'DEFECTIVE Bowl' : isRegrasp ? 'Inspection Camera' : 'GOOD Bowl'}
                 </span>
               </div>
               <div className="bg-[#18212c] p-2 rounded-[4px]">

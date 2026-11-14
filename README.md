@@ -166,6 +166,42 @@ The dashboard will update the Closed-Loop Pipeline bar, Dual-Camera feed, and Ne
 
 ---
 
+## 📋 Saturday Midday Station Playbook (`~/duplo-cell`)
+
+### 1. Four Team Roles
+- **Operator:** Sits at the hackathon laptop, pastes prompts, answers agents (checks tabs every 15 mins for `NEED A HUMAN`).
+- **Robot hand:** Moves the controller arm for Studio demonstrations and holds the physical power switch/plug during autonomous robot runs.
+- **Brick keeper:** Places & resets bricks lightly across the 3×3 grid (holding out 2 squares for testing), draws defects on ≥2 sides, seals **5 unmarked + 5 marked** bricks in the **EXAM** bag, logs what worked.
+- **Timekeeper:** Watches the 6 Helsinki checkpoints, talks to Intel/Modal mentors, screenshots Physical AI Studio (dataset, training, export screens), films the 20-brick backup video, and submits by Sunday 09:00.
+
+### 2. Three Exact Physical AI Studio Task Names (Copy with Full Stop `.`)
+```text
+Pick up a brick and hold it in front of the inspection camera.
+Put the brick in the good bowl.
+Put the brick in the defective bowl.
+```
+- **One cycle = two recordings:** first a **pick** (hold 1s at inspection camera, stop), then without letting go start the **place** recording to the `GOOD` or `DEFECTIVE` bowl and return to rest.
+- **Round 1 Quota:** 30 cycles (15 unmarked, 15 marked) + **~150 unmarked photos** (turning wrist slowly) + **~40 marked photos**.
+
+### 3. Five Terminal Tabs on the Hackathon Laptop
+1. **Lead:** `mkdir -p ~/duplo-cell && cd ~/duplo-cell && claude` (Paste Prompt 1, wait for `READY FOR HELPERS`)
+2. **Policy:** `cd ~/duplo-cell && claude` (Paste Prompt 2)
+3. **Inspection:** `cd ~/duplo-cell && claude` (Paste Prompt 3)
+4. **Speed and demo:** `cd ~/duplo-cell && claude` (Paste Prompt 4)
+5. **Robot:** `cd ~/duplo-cell` (**No Claude** — paste the robot run line from Lead, hold power switch, type `GO`, press `Ctrl+C` to stop)
+
+### 4. Six Checkpoints Timetable (Helsinki Time)
+| Checkpoint | What Must Be True | If Missed |
+|---|---|---|
+| **Sat 13:30** | Table taped & outlined (`GOOD` / `DEFECTIVE` bowls, plain backdrop). Studio works. Lead says `READY FOR HELPERS`. | Ask an Intel mentor about Studio now, and tell the Lead what is not working. |
+| **Sat 16:00** | 30 cycles recorded. Inspection photos taken (~150 unmarked, ~40 marked). Short test training run in cloud. | Keep recording, and type `what now?` in the Lead tab. |
+| **Sat 19:00** | Arm moves by itself from a trained model. `GOOD` or `DEFECT` verdict appears on screen. Full training running. | Tell Lead: `We missed the 19:00 checkpoint. Choose the simpler path.` |
+| **Sat 23:00** | One real brick sorted into the right bowl with no human touch. Run Prompt 5 (Judge). | Tell Lead: `We missed the 23:00 checkpoint. Choose the simpler path.` |
+| **Sun 03:00** | 8 of 10 bricks sorted on video. Feature freeze (only fixes from here). Run Prompt 5 (Judge). | Tell Lead: `We missed the 03:00 checkpoint. Choose the simpler path.` |
+| **Sun 09:00** | Submitted on Junction Platform (1h before 10:00 deadline). 20-brick backup video filmed; 3-min demo rehearsed 3x. | Submit what you have with video. |
+
+---
+
 ## 🎤 3-Minute Live Pitch Script for Judges
 
 1. **The Hook (30s):**

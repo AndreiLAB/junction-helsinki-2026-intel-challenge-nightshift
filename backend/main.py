@@ -179,6 +179,14 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
 
     if outcome_type is None:
         outcome_type = random.choice(["PERFECT", "DEFECTIVE", "REGRASP"])
+    else:
+        outcome_upper = outcome_type.upper()
+        if "PERFECT" in outcome_upper or "GOOD" in outcome_upper or "ACCEPT" in outcome_upper:
+            outcome_type = "PERFECT"
+        elif "DEFECT" in outcome_upper or "REJECT" in outcome_upper:
+            outcome_type = "DEFECTIVE"
+        else:
+            outcome_type = "REGRASP"
 
     # 1. PERCEIVE: Camera frame acquisition
     await set_stage("PERCEIVE")
@@ -196,7 +204,7 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
         action = "PERFECT_BOWL"
         reasoning = (
             f"Anomalib PatchCore on 50 TOPS NPU detected zero topological variance (score: {score:.2f}). "
-            f"Core Ultra Xe3 VLA planned direct trajectory to Accept Bowl 1. 0% defect likelihood."
+            f"Core Ultra Xe3 VLA planned direct trajectory to GOOD Bowl. 0% defect likelihood."
         )
         state.hardware_metrics["perfect_count"] += 1
     elif outcome_type == "DEFECTIVE":
@@ -210,7 +218,7 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
         action = "DEFECTIVE_BOWL"
         reasoning = (
             f"Anomalib localized anomaly cluster on upper quadrant (score: {score:.2f} > threshold 0.55). "
-            f"SmolVLA task policy committed rejection actuation to Discard Bowl 2."
+            f"SmolVLA task policy committed rejection actuation to DEFECTIVE Bowl."
         )
         state.hardware_metrics["defective_count"] += 1
     else: # REGRASP
@@ -219,7 +227,7 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
         action = "REGRASP_TRIGGERED"
         reasoning = (
             f"Borderline score ({score:.2f}) near decision boundary. "
-            f"SmolVLA uncertainty policy triggered wrist re-orientation to eliminate glare."
+            f"SmolVLA uncertainty policy triggered wrist rotation in front of inspection camera."
         )
         state.hardware_metrics["regrasp_count"] += 1
 
@@ -258,15 +266,20 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
         "defect_label": defect_label,
         "anomaly_score": score,
         "action": action,
-        "destination": "Bowl 1 (Accept)" if action == "PERFECT_BOWL" else ("Bowl 2 (Defective)" if action == "DEFECTIVE_BOWL" else "Inspection Turntable"),
+        "destination": "GOOD Bowl (Bowl 1)" if action == "PERFECT_BOWL" else ("DEFECTIVE Bowl (Bowl 2)" if action == "DEFECTIVE_BOWL" else "Inspection Camera (Re-orient)"),
         "root_cause_reasoning": reasoning,
+        "nemotron_reasoning": reasoning,
         "raw_url": media_res.get("raw_url"),
         "heatmap_url": media_res.get("heatmap_url", media_res.get("composite_heatmap_url")),
         "composite_url": media_res.get("composite_heatmap_url"),
+        "media_provider": media_res.get("provider", "local_synthesizer"),
         "latencies": {
             "npu_anomalib_ms": npu_lat,
             "igpu_vla_ms": igpu_lat,
             "cpu_control_ms": cpu_lat,
+            "npu_ms": npu_lat,
+            "igpu_ms": igpu_lat,
+            "cpu_ms": cpu_lat,
             "total_ms": state.hardware_metrics["total_pipeline_latency_ms"],
         },
         "openvino_dispatch": {
@@ -299,10 +312,10 @@ async def lifespan(app: FastAPI):
     # Pre-populate 4 realistic historical cycles so dashboard looks populated right upon load
     colors = ["blue", "yellow", "red", "green"]
     outcomes = [
-        ("PERFECT", "None (Pristine)", 0.14, "PERFECT_BOWL", "Bowl 1 (Accept)", "Pristine geometry verified by NPU PatchCore."),
-        ("DEFECTIVE", "Side Scratch / Deep Groove", 0.79, "DEFECTIVE_BOWL", "Bowl 2 (Defective)", "Significant topological surface groove exceeding 0.55 limit."),
-        ("REGRASP", "Specular Reflection Glare", 0.51, "REGRASP_TRIGGERED", "Inspection Turntable", "Specular flare on high-gloss cyan stud causing edge ambiguity."),
-        ("PERFECT", "None (Pristine)", 0.11, "PERFECT_BOWL", "Bowl 1 (Accept)", "Full structural symmetry confirmed at 41.5 FPS.")
+        ("PERFECT", "None (Pristine)", 0.14, "PERFECT_BOWL", "GOOD Bowl (Bowl 1)", "Pristine geometry verified by NPU PatchCore."),
+        ("DEFECTIVE", "Side Scratch / Deep Groove", 0.79, "DEFECTIVE_BOWL", "DEFECTIVE Bowl (Bowl 2)", "Significant topological surface groove exceeding 0.55 limit."),
+        ("REGRASP", "Specular Reflection Glare", 0.51, "REGRASP_TRIGGERED", "Inspection Camera (Re-orient)", "Specular flare on high-gloss cyan stud causing edge ambiguity."),
+        ("PERFECT", "None (Pristine)", 0.11, "PERFECT_BOWL", "GOOD Bowl (Bowl 1)", "Full structural symmetry confirmed at 41.5 FPS.")
     ]
     for i, (out, def_lbl, sc, act, dest, reason) in enumerate(outcomes):
         uid = f"init_{i+1}"
@@ -324,13 +337,18 @@ async def lifespan(app: FastAPI):
             "action": act,
             "destination": dest,
             "root_cause_reasoning": reason,
+            "nemotron_reasoning": reason,
             "raw_url": media.get("raw_url"),
             "heatmap_url": media.get("heatmap_url", media.get("composite_heatmap_url")),
             "composite_url": media.get("composite_heatmap_url"),
+            "media_provider": media.get("provider", "local_synthesizer"),
             "latencies": {
                 "npu_anomalib_ms": 9.4,
                 "igpu_vla_ms": 24.1,
                 "cpu_control_ms": 2.1,
+                "npu_ms": 9.4,
+                "igpu_ms": 24.1,
+                "cpu_ms": 2.1,
                 "total_ms": 35.6,
             },
             "openvino_dispatch": {
@@ -431,6 +449,11 @@ async def get_active_policy():
         "rules_count": len(state.active_rules),
         "rules": [r.model_dump() for r in state.active_rules if getattr(r, 'active', True)],
         "regrasp_range": [0.45, 0.65],
+        "studio_tasks": [
+            "Pick up a brick and hold it in front of the inspection camera.",
+            "Put the brick in the good bowl.",
+            "Put the brick in the defective bowl.",
+        ],
         "openvino_acceleration": {
             "npu_anomalib": "OpenVINO NPU Plugin (50 TOPS)",
             "igpu_vla": "OpenVINO Xe3 FP16 (12 Cores)",
@@ -498,6 +521,7 @@ async def ingest_edge_telemetry(payload: CycleIngestRequest):
     cpu_lat = payload.cpu_latency_ms or 2.1
     tot_lat = round(npu_lat + igpu_lat + cpu_lat, 2)
 
+    reason_text = payload.root_cause or "Edge telemetry processed via OpenVINO physical pipeline."
     cycle_record = {
         "cycle_id": f"CYC-{brick_uuid}",
         "timestamp": time.strftime("%H:%M:%S"),
@@ -505,15 +529,20 @@ async def ingest_edge_telemetry(payload: CycleIngestRequest):
         "defect_label": payload.defect_label,
         "anomaly_score": payload.anomaly_score,
         "action": payload.action,
-        "destination": "Bowl 1 (Accept)" if payload.action == "PERFECT_BOWL" else ("Bowl 2 (Defective)" if payload.action == "DEFECTIVE_BOWL" else "Inspection Turntable"),
-        "root_cause_reasoning": payload.root_cause or "Edge telemetry processed via OpenVINO physical pipeline.",
+        "destination": "GOOD Bowl (Bowl 1)" if payload.action == "PERFECT_BOWL" else ("DEFECTIVE Bowl (Bowl 2)" if payload.action == "DEFECTIVE_BOWL" else "Inspection Camera (Re-orient)"),
+        "root_cause_reasoning": reason_text,
+        "nemotron_reasoning": reason_text,
         "raw_url": media_res.get("raw_url"),
         "heatmap_url": media_res.get("heatmap_url", media_res.get("composite_heatmap_url")),
         "composite_url": media_res.get("composite_heatmap_url"),
+        "media_provider": media_res.get("provider", "local_synthesizer"),
         "latencies": {
             "npu_anomalib_ms": npu_lat,
             "igpu_vla_ms": igpu_lat,
             "cpu_control_ms": cpu_lat,
+            "npu_ms": npu_lat,
+            "igpu_ms": igpu_lat,
+            "cpu_ms": cpu_lat,
             "total_ms": tot_lat,
         },
         "openvino_dispatch": {

@@ -150,6 +150,22 @@ def create_simulated_brick_image(
     return to_data_uri(raw_img), to_data_uri(heat_img), to_data_uri(composite)
 
 
+def _is_valid_upload_source(data: bytes | str | None) -> bool:
+    if data is None:
+        return False
+    if isinstance(data, bytes):
+        return len(data) > 0
+    if isinstance(data, str):
+        s = data.strip()
+        return (
+            s.startswith("data:image/")
+            or s.startswith("http://")
+            or s.startswith("https://")
+            or os.path.isfile(s)
+        )
+    return False
+
+
 def upload_inspection_with_heatmap(
     brick_uuid: str,
     raw_image_data: bytes | str,
@@ -165,14 +181,37 @@ def upload_inspection_with_heatmap(
     """
     global cloudinary_enabled
 
+    # Generate high-res simulation URIs (used as fallback or when caller passes synthetic placeholder IDs)
+    is_defective = score > 0.40 or (
+        "perfect" not in defect_label.lower() and "pristine" not in defect_label.lower()
+    )
+    raw_uri, heat_uri, comp_uri = create_simulated_brick_image(
+        color=color,
+        defect_type=defect_label,
+        is_defective=is_defective,
+        score=score,
+    )
+
+    # Keep server lifespan seed cycles instant without blocking startup on network I/O
+    if str(brick_uuid).startswith("init_"):
+        return {
+            "raw_url": raw_uri,
+            "heatmap_url": heat_uri,
+            "composite_heatmap_url": comp_uri,
+            "provider": "local_synthesizer",
+        }
+
     if cloudinary_enabled:
         try:
             import cloudinary.uploader
             from cloudinary import CloudinaryImage
 
+            raw_source = raw_image_data if _is_valid_upload_source(raw_image_data) else raw_uri
+            heat_source = heatmap_image_data if _is_valid_upload_source(heatmap_image_data) else heat_uri
+
             # Upload raw image
             raw_res = cloudinary.uploader.upload(
-                raw_image_data,
+                raw_source,
                 public_id=f"junction2026/raw_{brick_uuid}",
                 tags=["junction2026", defect_label],
                 overwrite=True,
@@ -180,8 +219,8 @@ def upload_inspection_with_heatmap(
 
             # Upload heatmap mask
             heat_id = f"junction2026/heat_{brick_uuid}"
-            cloudinary.uploader.upload(
-                heatmap_image_data,
+            heat_res = cloudinary.uploader.upload(
+                heat_source,
                 public_id=heat_id,
                 overwrite=True,
             )
@@ -197,21 +236,14 @@ def upload_inspection_with_heatmap(
             )
 
             return {
-                "raw_url": raw_res.get("secure_url", ""),
-                "composite_heatmap_url": composite_url,
+                "raw_url": raw_res.get("secure_url", raw_uri),
+                "heatmap_url": heat_res.get("secure_url", heat_uri),
+                "composite_heatmap_url": composite_url or comp_uri,
                 "provider": "cloudinary",
             }
         except Exception as e:
-            logger.error(f"Cloudinary upload failed: {e}. Falling back to simulation.")
+            logger.error(f"Cloudinary upload failed ({type(e).__name__}). Falling back to simulation.")
 
-    # Graceful fallback: generate high-res simulation
-    is_defective = score > 0.40 or ("perfect" not in defect_label.lower())
-    raw_uri, heat_uri, comp_uri = create_simulated_brick_image(
-        color=color,
-        defect_type=defect_label,
-        is_defective=is_defective,
-        score=score,
-    )
     return {
         "raw_url": raw_uri,
         "heatmap_url": heat_uri,

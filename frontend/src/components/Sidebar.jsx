@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
-import { LayoutGrid, Camera, Sliders, History, Cpu, Settings, HelpCircle, ChevronRight } from 'lucide-react';
+import React from 'react';
+import { LayoutGrid, Camera, Sliders, History, Cpu, BookOpen, Settings, HelpCircle } from 'lucide-react';
 
 export default function Sidebar({ activeTab, onSelectTab, wsConnected }) {
-  const [currentTab, setCurrentTab] = useState(activeTab || 'overview');
+  const currentTab = activeTab || 'overview';
 
   const navItems = [
     { id: 'overview', label: 'Overview', icon: LayoutGrid },
@@ -10,10 +10,10 @@ export default function Sidebar({ activeTab, onSelectTab, wsConnected }) {
     { id: 'rules', label: 'Sorting rules', icon: Sliders },
     { id: 'history', label: 'Cycle history', icon: History },
     { id: 'hardware', label: 'Hardware', icon: Cpu },
+    { id: 'playbook', label: 'Station playbook', icon: BookOpen },
   ];
 
   const handleSelect = (id) => {
-    setCurrentTab(id);
     if (onSelectTab) onSelectTab(id);
   };
 
@@ -106,13 +106,19 @@ export default function Sidebar({ activeTab, onSelectTab, wsConnected }) {
 
         {/* Bottom Nav items */}
         <div className="space-y-1 pt-2 border-t border-[#26313e]/60">
-          <button className="w-full flex items-center space-x-3 px-2 py-1.5 text-[12px] text-[#8e9bae] hover:text-[#edf2f7] transition-colors rounded">
+          <button
+            onClick={() => handleSelect('overview')}
+            className="w-full flex items-center space-x-3 px-2 py-1.5 text-[12px] text-[#8e9bae] hover:text-[#edf2f7] transition-colors rounded"
+          >
             <Settings className="w-4 h-4 text-[#8e9bae]" />
-            <span>Settings</span>
+            <span>Mission control</span>
           </button>
-          <button className="w-full flex items-center space-x-3 px-2 py-1.5 text-[12px] text-[#8e9bae] hover:text-[#edf2f7] transition-colors rounded">
+          <button
+            onClick={() => handleSelect('playbook')}
+            className="w-full flex items-center space-x-3 px-2 py-1.5 text-[12px] text-[#8e9bae] hover:text-[#edf2f7] transition-colors rounded"
+          >
             <HelpCircle className="w-4 h-4 text-[#8e9bae]" />
-            <span>Help & documentation</span>
+            <span>Station playbook</span>
           </button>
         </div>
       </div>
