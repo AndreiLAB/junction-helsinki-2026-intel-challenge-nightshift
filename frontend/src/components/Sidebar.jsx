@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutGrid, Camera, Sliders, History, Cpu, BookOpen, Settings, HelpCircle } from 'lucide-react';
+import { LayoutGrid, Camera, Sliders, History, Cpu, Settings, Cloud } from 'lucide-react';
 
 export default function Sidebar({ activeTab, onSelectTab, wsConnected }) {
   const currentTab = activeTab || 'overview';
@@ -10,7 +10,6 @@ export default function Sidebar({ activeTab, onSelectTab, wsConnected }) {
     { id: 'rules', label: 'Sorting rules', icon: Sliders },
     { id: 'history', label: 'Cycle history', icon: History },
     { id: 'hardware', label: 'Hardware', icon: Cpu },
-    { id: 'playbook', label: 'Station playbook', icon: BookOpen },
   ];
 
   const handleSelect = (id) => {
@@ -105,7 +104,7 @@ export default function Sidebar({ activeTab, onSelectTab, wsConnected }) {
         </div>
 
         {/* Bottom Nav items */}
-        <div className="space-y-1 pt-2 border-t border-[#26313e]/60">
+        <div className="space-y-1.5 pt-2 border-t border-[#26313e]/60">
           <button
             onClick={() => handleSelect('overview')}
             className="w-full flex items-center space-x-3 px-2 py-1.5 text-[12px] text-[#8e9bae] hover:text-[#edf2f7] transition-colors rounded"
@@ -113,13 +112,10 @@ export default function Sidebar({ activeTab, onSelectTab, wsConnected }) {
             <Settings className="w-4 h-4 text-[#8e9bae]" />
             <span>Mission control</span>
           </button>
-          <button
-            onClick={() => handleSelect('playbook')}
-            className="w-full flex items-center space-x-3 px-2 py-1.5 text-[12px] text-[#8e9bae] hover:text-[#edf2f7] transition-colors rounded"
-          >
-            <HelpCircle className="w-4 h-4 text-[#8e9bae]" />
-            <span>Station playbook</span>
-          </button>
+          <div className="flex items-center space-x-3 px-2 py-1 text-[11px] text-[#8e9bae]/80">
+            <Cloud className="w-3.5 h-3.5 text-[#55dbb1]/80 shrink-0" />
+            <span>Unified Cloud &amp; Edge Hub</span>
+          </div>
         </div>
       </div>
     </aside>

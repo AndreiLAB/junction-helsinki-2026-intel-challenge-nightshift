@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Sidebar from './components/Sidebar';
 import PerformanceOverview from './components/PerformanceOverview';
 import ClosedLoopPipeline from './components/ClosedLoopPipeline';
@@ -7,10 +7,15 @@ import IntelTelemetry from './components/IntelTelemetry';
 import GeminiCopilot from './components/GeminiCopilot';
 import NemotronAuditFeed from './components/NemotronAuditFeed';
 import CycleModal from './components/CycleModal';
-import StationPlaybook from './components/StationPlaybook';
-import { Play, ChevronDown, ArrowRight, ToggleLeft, ToggleRight, BookOpen } from 'lucide-react';
+import { Play, ArrowRight, ToggleLeft, ToggleRight, Cloud } from 'lucide-react';
 
-const TEAM_ROLES = ['Operator', 'Robot hand', 'Brick keeper', 'Timekeeper'];
+const CLOUD_STACK_LAYERS = [
+  { key: 'gemini', label: 'Gemini 3.8' },
+  { key: 'cloudinary', label: 'Cloudinary' },
+  { key: 'nemotron', label: 'Nemotron B300' },
+  { key: 'mariadb', label: 'MariaDB Vector' },
+  { key: 'modal', label: 'Modal' },
+];
 
 const API_BASE = import.meta.env.VITE_API_URL || (window.location.port === '5173' ? 'http://localhost:8000' : (window.location.hostname === 'localhost' ? 'http://localhost:8000' : ''));
 const WS_URL = import.meta.env.VITE_WS_URL || (window.location.protocol === 'https:' ? `wss://${window.location.hostname || 'localhost'}:8000/ws/live` : `ws://${window.location.hostname || 'localhost'}:8000/ws/live`);
@@ -25,10 +30,28 @@ export default function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const [selectedCycle, setSelectedCycle] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
-  const [roleIndex, setRoleIndex] = useState(0);
-  const currentRole = TEAM_ROLES[roleIndex % TEAM_ROLES.length];
+  const [cloudProviders, setCloudProviders] = useState(null);
 
   const wsRef = useRef(null);
+
+  // Cloud stack health check (/api/health)
+  const fetchHealth = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/health`);
+      if (res.ok) {
+        const data = await res.json();
+        setCloudProviders(data.cloud_providers || null);
+      }
+    } catch (err) {
+      console.warn("Could not fetch /api/health:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchHealth();
+    const intervalId = setInterval(fetchHealth, 10000);
+    return () => clearInterval(intervalId);
+  }, [fetchHealth]);
 
   // Initial state fetch from REST API
   useEffect(() => {
@@ -76,13 +99,14 @@ export default function App() {
             setActiveStage(msg.stage);
           } else if (msg.type === 'NEW_CYCLE') {
             setCurrentCycle(msg.cycle);
-            setRecentCycles(prev => [msg.cycle, ...prev.slice(0, 39)]);
+            setRecentCycles(prev => [msg.cycle, ...prev.filter(c => c.cycle_id !== msg.cycle.cycle_id)].slice(0, 40));
             if (msg.hardware_metrics) setHardwareMetrics(msg.hardware_metrics);
+            fetchHealth();
           } else if (msg.type === 'CYCLE_UPDATED') {
             setRecentCycles(prev => prev.map(c => c.cycle_id === msg.cycle.cycle_id ? msg.cycle : c));
-            if (currentCycle?.cycle_id === msg.cycle.cycle_id) {
-              setCurrentCycle(msg.cycle);
-            }
+            setCurrentCycle(prev => prev?.cycle_id === msg.cycle.cycle_id ? msg.cycle : prev);
+            setSelectedCycle(prev => prev?.cycle_id === msg.cycle.cycle_id ? msg.cycle : prev);
+            fetchHealth();
           } else if (msg.type === 'INITIAL_STATE') {
             if (msg.active_rules) setActiveRules(msg.active_rules);
             if (msg.recent_cycles) {
@@ -122,7 +146,7 @@ export default function App() {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (wsRef.current) wsRef.current.close();
     };
-  }, []);
+  }, [fetchHealth]);
 
   // API Callbacks
   const handleTriggerCycle = async (outcome) => {
@@ -133,7 +157,7 @@ export default function App() {
         const data = await res.json();
         if (data.cycle) {
           setCurrentCycle(data.cycle);
-          setRecentCycles(prev => [data.cycle, ...prev.slice(0, 39)]);
+          setRecentCycles(prev => [data.cycle, ...prev.filter(c => c.cycle_id !== data.cycle.cycle_id)].slice(0, 40));
         }
       }
     } catch (err) {
@@ -202,13 +226,9 @@ export default function App() {
 
             <div className="h-4 w-px bg-[#26313e] hidden sm:block" />
 
-            <div
-              onClick={() => setRoleIndex((i) => (i + 1) % TEAM_ROLES.length)}
-              title="Click to swap team role (Operator / Robot hand / Brick keeper / Timekeeper)"
-              className="bg-[#18212c] border border-[#26313e] px-3 py-1.5 rounded-[5px] flex items-center space-x-2 cursor-pointer hover:border-[#55dbb1]/50 transition-colors select-none"
-            >
-              <span className="text-[11px] text-[#b5c0ce]">{currentRole}</span>
-              <ChevronDown className="w-3.5 h-3.5 text-[#8e9bae]" />
+            <div className="bg-[#18212c] border border-[#26313e] px-3 py-1.5 rounded-[5px] flex items-center space-x-2 select-none">
+              <Cloud className="w-3.5 h-3.5 text-[#55dbb1]" />
+              <span className="text-[11px] font-medium text-[#b5c0ce]">Cloud &amp; AI Hub · M3+M4</span>
             </div>
           </div>
         </header>
@@ -219,29 +239,14 @@ export default function App() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h1 className="text-[27px] font-semibold text-[#edf2f7] leading-tight">
-                {activeTab === 'playbook' ? 'Station Playbook & Timetable' : 'Mission control'}
+                Mission control
               </h1>
               <p className="text-[13px] text-[#8e9bae] mt-1">
-                {activeTab === 'playbook'
-                  ? 'Saturday midday execution guide: Studio tasks, 3×3 grid, ~/duplo-cell tabs & 6 Helsinki checkpoints.'
-                  : 'Autonomous inspection, from perception to action.'}
+                Autonomous inspection, from perception to action.
               </p>
             </div>
 
             <div className="flex items-center space-x-3 self-end sm:self-auto shrink-0">
-              {/* Quick toggle between Playbook and Live Overview */}
-              <button
-                onClick={() => setActiveTab(activeTab === 'playbook' ? 'overview' : 'playbook')}
-                className={`px-3 py-2 rounded-[6px] text-[12px] font-medium flex items-center space-x-1.5 border transition-colors ${
-                  activeTab === 'playbook'
-                    ? 'bg-[#18212c] border-[#55dbb1]/50 text-[#55dbb1]'
-                    : 'bg-[#121922] border-[#26313e] text-[#b5c0ce] hover:text-[#edf2f7]'
-                }`}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>{activeTab === 'playbook' ? 'Back to Live Feed' : 'Station playbook'}</span>
-              </button>
-
               {/* Dispatch Live Indicator */}
               <div className="bg-[#15352e] border border-[#55dbb1]/30 px-3 py-1 rounded-[5px] flex items-center space-x-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#55dbb1] animate-ping" />
@@ -259,60 +264,89 @@ export default function App() {
             </div>
           </div>
 
-          {activeTab === 'playbook' ? (
-            <StationPlaybook />
-          ) : (
-            <>
-              {/* Performance Overview (4 Stat Cards) */}
-              <PerformanceOverview cycles={recentCycles} />
+          {/* Cloud Stack Status Bar */}
+          <div className="bg-[#0e131a] border border-[#26313e] rounded-[8px] px-3.5 py-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center space-x-2 text-[11px] font-semibold text-[#8e9bae] uppercase tracking-wider">
+              <Cloud className="w-3.5 h-3.5 text-[#55dbb1]" />
+              <span>Cloud Stack Status</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {CLOUD_STACK_LAYERS.map((layer) => {
+                const provider = cloudProviders?.[layer.key];
+                const isLive = provider?.mode === 'LIVE';
+                return (
+                  <div
+                    key={layer.key}
+                    title={provider?.detail || ''}
+                    className={`px-2.5 py-1 rounded-[5px] border text-[11px] flex items-center space-x-1.5 transition-colors ${
+                      isLive
+                        ? 'text-[#55dbb1] bg-[#15352e] border-[#55dbb1]/30'
+                        : 'text-[#e9bf79] bg-[#352e21]/60 border-[#e9bf79]/25'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                        isLive ? 'bg-[#55dbb1]' : 'bg-[#e9bf79]/80'
+                      }`}
+                    />
+                    <span className="text-[#edf2f7] font-medium">{layer.label}</span>
+                    <span className="font-mono text-[10px] font-semibold tracking-wide">
+                      {isLive ? 'LIVE' : 'FALLBACK'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
 
-              {/* Closed-Loop Autonomous Pipeline Bar */}
-              <ClosedLoopPipeline activeStage={activeStage} />
+          {/* Performance Overview (4 Stat Cards) */}
+          <PerformanceOverview cycles={recentCycles} />
 
-              {/* Grid Row 1: Live Inspection & Edge Telemetry */}
-              {(activeTab === 'overview' || activeTab === 'inspection' || activeTab === 'hardware') && (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-                  {(activeTab === 'overview' || activeTab === 'inspection') && (
-                    <div className={activeTab === 'inspection' ? 'lg:col-span-12' : 'lg:col-span-7 xl:col-span-8'}>
-                      <DualCameraFeed currentCycle={currentCycle} />
-                    </div>
-                  )}
-                  {(activeTab === 'overview' || activeTab === 'hardware') && (
-                    <div className={activeTab === 'hardware' ? 'lg:col-span-12' : 'lg:col-span-5 xl:col-span-4'}>
-                      <IntelTelemetry
-                        metrics={hardwareMetrics}
-                        simulationRunning={simulationRunning}
-                        onTriggerCycle={handleTriggerCycle}
-                        onToggleContinuousSimulation={handleToggleContinuousSimulation}
-                      />
-                    </div>
-                  )}
+          {/* Closed-Loop Autonomous Pipeline Bar */}
+          <ClosedLoopPipeline activeStage={activeStage} />
+
+          {/* Grid Row 1: Live Inspection & Edge Telemetry */}
+          {(activeTab === 'overview' || activeTab === 'inspection' || activeTab === 'hardware') && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              {(activeTab === 'overview' || activeTab === 'inspection') && (
+                <div className={activeTab === 'inspection' ? 'lg:col-span-12' : 'lg:col-span-7 xl:col-span-8'}>
+                  <DualCameraFeed currentCycle={currentCycle} />
                 </div>
               )}
-
-              {/* Grid Row 2: Floor Copilot & Inspection History */}
-              {(activeTab === 'overview' || activeTab === 'rules' || activeTab === 'history') && (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-                  {(activeTab === 'overview' || activeTab === 'rules') && (
-                    <div className={activeTab === 'rules' ? 'lg:col-span-12' : 'lg:col-span-5 xl:col-span-5'}>
-                      <GeminiCopilot
-                        activeRules={activeRules}
-                        onRuleCreated={handleRuleCreated}
-                        onRuleDeleted={handleRuleDeleted}
-                      />
-                    </div>
-                  )}
-                  {(activeTab === 'overview' || activeTab === 'history') && (
-                    <div className={activeTab === 'history' ? 'lg:col-span-12' : 'lg:col-span-7 xl:col-span-7'}>
-                      <NemotronAuditFeed
-                        cycles={recentCycles}
-                        onSelectCycle={(cycle) => setSelectedCycle(cycle)}
-                      />
-                    </div>
-                  )}
+              {(activeTab === 'overview' || activeTab === 'hardware') && (
+                <div className={activeTab === 'hardware' ? 'lg:col-span-12' : 'lg:col-span-5 xl:col-span-4'}>
+                  <IntelTelemetry
+                    metrics={hardwareMetrics}
+                    simulationRunning={simulationRunning}
+                    onTriggerCycle={handleTriggerCycle}
+                    onToggleContinuousSimulation={handleToggleContinuousSimulation}
+                  />
                 </div>
               )}
-            </>
+            </div>
+          )}
+
+          {/* Grid Row 2: Floor Copilot & Inspection History */}
+          {(activeTab === 'overview' || activeTab === 'rules' || activeTab === 'history') && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              {(activeTab === 'overview' || activeTab === 'rules') && (
+                <div className={activeTab === 'rules' ? 'lg:col-span-12' : 'lg:col-span-5 xl:col-span-5'}>
+                  <GeminiCopilot
+                    activeRules={activeRules}
+                    onRuleCreated={handleRuleCreated}
+                    onRuleDeleted={handleRuleDeleted}
+                  />
+                </div>
+              )}
+              {(activeTab === 'overview' || activeTab === 'history') && (
+                <div className={activeTab === 'history' ? 'lg:col-span-12' : 'lg:col-span-7 xl:col-span-7'}>
+                  <NemotronAuditFeed
+                    cycles={recentCycles}
+                    onSelectCycle={(cycle) => setSelectedCycle(cycle)}
+                  />
+                </div>
+              )}
+            </div>
           )}
 
           {/* System Footer matching Figma */}

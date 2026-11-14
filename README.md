@@ -1,24 +1,24 @@
 # 🏭 Junction Helsinki 2026 — Intel Physical AI Challenge
 ## Team NightShift | Autonomous Duplo Brick Robotic Inspection Cell
-> **Lead Author:** Member 4 — *Gemini Multimodal Floor Copilot, Cloudinary Media & Live Pitch Mission Control Lead*
+> **Lead Author:** Unified Cloud, AI & Data Hub Lead (Merged Member 3 + Member 4) — *Gemini 3.8 Copilot, Verda B300 Nemotron, MariaDB Vector Store, Modal Escalation, Cloudinary Media & Mission Control UI*
 
 ---
 
-## 🧭 Executive Summary (Member 4's Perspective)
+## 🧭 Executive Summary (Unified Cloud, AI & Data Hub)
 
-As **Member 4** of **Team NightShift**, my objective for Night 1 was to build and validate the entire **presentation, telemetry, multimodal AI, and media stack** independently—without waiting on teammates, Claude credits, or the physical robot arm.
+This repository implements **Team NightShift's Unified Cloud, AI & Data Hub** — decoupling all heavy multimodal reasoning, vector similarity indexing, media compositing, and live telemetry visualization from the `<36 ms` local robot loop on the Ubuntu Intel Core Ultra X9 388H workstation (`~/duplo-cell`).
 
-Using our built-in cycle simulator, I built a zero-failure full-stack mission-control hub in **Python FastAPI** and **React + Vite + Tailwind CSS** that:
-1. **Visualizes the complete closed loop in real time** (`PERCEIVE → DETECT → REASON → ACT → OPTIMIZE`).
-2. **Demonstrates Intel Core Ultra X9 388H heterogeneous acceleration** across all silicon engines:
+Built in **Python FastAPI** and **React + Vite + Tailwind CSS**, the hub delivers:
+1. **Real-Time Closed-Loop Telemetry (`PERCEIVE → DETECT → REASON → ACT → OPTIMIZE`)** across Intel Core Ultra X9 388H heterogeneous silicon:
    - **50-TOPS NPU:** Anomalib v2.7.0 PatchCore defect localization (~9.4 ms, 4.8W sustained).
    - **12 Xe3 Cores (iGPU):** SmolVLA / ACT task planning via OpenVINO (~24.1 ms, 41.5 FPS).
    - **Deterministic CPU:** Intel TCC + TSN real-time kinematics loop (~2.1 ms, jitter <15µs).
-   - **Total AI decision loop: ~35.6 ms (28+ Hz throughput)**.
-3. **Implements a hands-free multimodal floor copilot** powered by **Gemini 3.8 Flash** (`google-genai` SDK): operators or judges can show a marked test coupon to the webcam and speak a verbal rule (e.g., *"Reject yellow bricks with black side stripes"*), immediately updating active robot sorting policies with spoken audio confirmation.
-4. **Maintains a Cloudinary visual audit trail**: uploads raw optical inspection crops and Anomalib heatmaps, auto-compositing semi-transparent overlays (`opacity: 45`) alongside Nemotron root-cause reasoning.
-
-Tomorrow morning, Members 1, 2, and 3 can plug their live physical SO-ARM101 robot arm and OpenVINO inference stream directly into `POST /api/cycles` in one line of Python!
+   - **Total edge decision loop: ~35.6 ms (28+ Hz throughput)** with **0 ms** added cloud latency.
+2. **Gemini 3.8 Flash Hands-Free Floor Copilot (`backend/gemini_copilot.py`):** Operators show a marked brick coupon to the webcam and speak a rule in plain English, updating active sorting rules (`GET /api/policy`) with spoken audio confirmation.
+3. **Cloudinary Visual Audit Trail (`backend/cloudinary_media.py`):** Uploads raw inspection crops and Anomalib heatmaps, auto-compositing semi-transparent `l_overlay` (`opacity: 45`) layers.
+4. **Verda B300 NVIDIA Nemotron 3.5 Super VL Worker (`backend/nemotron_worker.py`):** Asynchronous background visual root-cause reasoning and dynamic anomaly threshold auto-tuning streamed live via `CYCLE_UPDATED` WebSocket events.
+5. **MariaDB 11.7+ `VECTOR(512)` Defect Store (`backend/mariadb_store.py`):** Indexes 512-dim visual + telemetry brick embeddings (`VEC_DISTANCE_COSINE`) to surface top-3 historical defect twins on every cycle (`GET /api/cycles/{id}/similar`), with automatic in-memory cosine fallback.
+6. **Modal Serverless Escalation Webhook (`backend/modal_webhook.py`):** Deployable `@modal.fastapi_endpoint` (`modal deploy backend/modal_webhook.py`) triggered asynchronously on `DEFECTIVE_BOWL` and `REGRASP_TRIGGERED` cycles for batch audit & retraining hooks.
 
 ---
 
@@ -123,7 +123,15 @@ GEMINI_API_KEY=your_gemini_api_key_here
 # Cloudinary URL for media asset uploads & composite overlays
 CLOUDINARY_URL=cloudinary://api_key:api_secret@cloud_name
 
-# Modal webhook for GPU cloud instance training callbacks (Slide 8)
+# Verda Cloud B300 NVIDIA Nemotron 3.5 Super VL
+NEMOTRON_BASE_URL=https://containers.datacrunch.io/nemotron-3-5-super-vl-b300/v1
+NEMOTRON_API_KEY=your_verda_api_key_here
+NEMOTRON_MODEL=nemotron-3.5-super-vl
+
+# MariaDB 11.7+ Native Vector Search (VECTOR(512) + VEC_DISTANCE_COSINE)
+MARIADB_URI=mysql://user:password@host:3306/junction_ai
+
+# Modal Serverless Escalation Webhook (`modal deploy backend/modal_webhook.py`)
 MODAL_WEBHOOK_URL=http://localhost:8000/mock-modal
 
 PORT=8000
@@ -131,74 +139,34 @@ HOST=0.0.0.0
 ```
 
 > [!TIP]
-> **Zero-Failure Offline Mode:** If `GEMINI_API_KEY` or `CLOUDINARY_URL` are omitted, the backend automatically uses its built-in high-fidelity synthetic image generator and heuristic rule extractor. You can pitch the entire app without an internet connection!
+> **Honest Live vs. Fallback Telemetry:** `GET /api/health` exposes live connectivity status (`LIVE` vs `FALLBACK`) for all 5 cloud providers (`Gemini 3.8`, `Cloudinary`, `Nemotron B300`, `MariaDB Vector`, and `Modal`). Any unconfigured or offline service falls back cleanly in-process with zero errors.
 
 ---
 
-## 🤝 Teammate Integration Guide (For Members 1, 2 & 3)
+## 🤝 Edge Workstation Integration (`~/duplo-cell` → Cloud Hub)
 
-When the physical SO-101 robot arm and the live OpenVINO inference pipeline run tomorrow, ingest cycles into this dashboard with a simple HTTP POST request:
+Copy `backend/duplo_cell_bridge.py` to the Ubuntu Intel Core Ultra X9 388H workstation (`~/duplo-cell`) or call `POST /api/cycles` directly. `push_cycle_async` dispatches on a daemon thread so the physical SO-ARM101 loop never blocks (`0 ms` added latency):
 
-### Python Ingestion Snippet (`robot_agent.py`)
 ```python
-import requests
+from duplo_cell_bridge import push_cycle_async, get_active_policy
 
-def report_inspection_cycle(brick_uuid, color, anomaly_score, is_defective, needs_regrasp, reason):
-    action = "DEFECTIVE_BOWL" if is_defective else ("REGRASP_TRIGGERED" if needs_regrasp else "PERFECT_BOWL")
-    defect_label = "Surface Defect" if is_defective else ("Specular Glare" if needs_regrasp else "None (Pristine)")
-    
-    payload = {
-        "brick_uuid": brick_uuid,
-        "color": color,                         # "yellow", "blue", "red", "green", "orange"
-        "defect_label": defect_label,
-        "anomaly_score": float(anomaly_score),  # float 0.0 to 1.0 (threshold 0.55)
-        "action": action,                       # "PERFECT_BOWL" | "DEFECTIVE_BOWL" | "REGRASP_TRIGGERED"
-        "root_cause": reason,
-        "npu_latency_ms": 9.4,                  # Anomalib on 50 TOPS NPU
-        "igpu_latency_ms": 24.1,                # SmolVLA on 12 Xe3 Cores
-        "cpu_latency_ms": 2.1                   # Deterministic kinematics loop
-    }
-    
-    response = requests.post("http://localhost:8000/api/cycles", json=payload)
-    return response.json()
+# 1. Poll active Gemini sorting rules & Nemotron-tuned anomaly threshold
+policy = get_active_policy(hub_url="http://<CLOUD_HUB_LAN_IP>:8000")
+
+# 2. Fire-and-forget cycle push after each brick inspection
+push_cycle_async(
+    color="yellow",
+    defect_label="Marker Stripe Contamination",
+    anomaly_score=0.78,
+    action="DEFECTIVE_BOWL",
+    raw_image_path="/tmp/cam02_raw.png",
+    heatmap_image_path="/tmp/cam02_heatmap.png",
+    npu_latency_ms=9.4,
+    igpu_latency_ms=24.1,
+    cpu_latency_ms=2.1,
+    hub_url="http://<CLOUD_HUB_LAN_IP>:8000",
+)
 ```
-The dashboard will update the Closed-Loop Pipeline bar, Dual-Camera feed, and Nemotron Audit trail instantly over WebSockets.
-
----
-
-## 📋 Saturday Midday Station Playbook (`~/duplo-cell`)
-
-### 1. Four Team Roles
-- **Operator:** Sits at the hackathon laptop, pastes prompts, answers agents (checks tabs every 15 mins for `NEED A HUMAN`).
-- **Robot hand:** Moves the controller arm for Studio demonstrations and holds the physical power switch/plug during autonomous robot runs.
-- **Brick keeper:** Places & resets bricks lightly across the 3×3 grid (holding out 2 squares for testing), draws defects on ≥2 sides, seals **5 unmarked + 5 marked** bricks in the **EXAM** bag, logs what worked.
-- **Timekeeper:** Watches the 6 Helsinki checkpoints, talks to Intel/Modal mentors, screenshots Physical AI Studio (dataset, training, export screens), films the 20-brick backup video, and submits by Sunday 09:00.
-
-### 2. Three Exact Physical AI Studio Task Names (Copy with Full Stop `.`)
-```text
-Pick up a brick and hold it in front of the inspection camera.
-Put the brick in the good bowl.
-Put the brick in the defective bowl.
-```
-- **One cycle = two recordings:** first a **pick** (hold 1s at inspection camera, stop), then without letting go start the **place** recording to the `GOOD` or `DEFECTIVE` bowl and return to rest.
-- **Round 1 Quota:** 30 cycles (15 unmarked, 15 marked) + **~150 unmarked photos** (turning wrist slowly) + **~40 marked photos**.
-
-### 3. Five Terminal Tabs on the Hackathon Laptop
-1. **Lead:** `mkdir -p ~/duplo-cell && cd ~/duplo-cell && claude` (Paste Prompt 1, wait for `READY FOR HELPERS`)
-2. **Policy:** `cd ~/duplo-cell && claude` (Paste Prompt 2)
-3. **Inspection:** `cd ~/duplo-cell && claude` (Paste Prompt 3)
-4. **Speed and demo:** `cd ~/duplo-cell && claude` (Paste Prompt 4)
-5. **Robot:** `cd ~/duplo-cell` (**No Claude** — paste the robot run line from Lead, hold power switch, type `GO`, press `Ctrl+C` to stop)
-
-### 4. Six Checkpoints Timetable (Helsinki Time)
-| Checkpoint | What Must Be True | If Missed |
-|---|---|---|
-| **Sat 13:30** | Table taped & outlined (`GOOD` / `DEFECTIVE` bowls, plain backdrop). Studio works. Lead says `READY FOR HELPERS`. | Ask an Intel mentor about Studio now, and tell the Lead what is not working. |
-| **Sat 16:00** | 30 cycles recorded. Inspection photos taken (~150 unmarked, ~40 marked). Short test training run in cloud. | Keep recording, and type `what now?` in the Lead tab. |
-| **Sat 19:00** | Arm moves by itself from a trained model. `GOOD` or `DEFECT` verdict appears on screen. Full training running. | Tell Lead: `We missed the 19:00 checkpoint. Choose the simpler path.` |
-| **Sat 23:00** | One real brick sorted into the right bowl with no human touch. Run Prompt 5 (Judge). | Tell Lead: `We missed the 23:00 checkpoint. Choose the simpler path.` |
-| **Sun 03:00** | 8 of 10 bricks sorted on video. Feature freeze (only fixes from here). Run Prompt 5 (Judge). | Tell Lead: `We missed the 03:00 checkpoint. Choose the simpler path.` |
-| **Sun 09:00** | Submitted on Junction Platform (1h before 10:00 deadline). 20-brick backup video filmed; 3-min demo rehearsed 3x. | Submit what you have with video. |
 
 ---
 

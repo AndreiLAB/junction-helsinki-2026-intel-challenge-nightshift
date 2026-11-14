@@ -11,8 +11,21 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, F
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+import cloudinary_media
 from cloudinary_media import upload_inspection_with_heatmap, create_simulated_brick_image
-from gemini_copilot import extract_rule_from_multimodal, SortingRule
+from gemini_copilot import extract_rule_from_multimodal, SortingRule, GEMINI_MODEL
+from mariadb_store import (
+    compute_brick_embedding,
+    record_cycle_and_find_similar,
+    find_similar_for_cycle_id,
+    get_mariadb_status,
+)
+from nemotron_worker import analyze_cycle_with_nemotron, get_nemotron_status
+from modal_webhook import (
+    dispatch_modal_escalation,
+    evaluate_escalation_payload,
+    get_modal_status,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -86,6 +99,7 @@ class SystemState:
         self.current_pipeline_stage: str = "IDLE" # IDLE, PERCEIVE, DETECT, REASON, ACT, OPTIMIZE
         self.simulation_running: bool = False
         self.simulation_task: Optional[asyncio.Task] = None
+        self.background_tasks: set[asyncio.Task] = set()
 
         # Telemetry metrics for Intel Core Ultra X9 388H AI PC
         self.hardware_metrics = {
@@ -141,6 +155,83 @@ class CycleIngestRequest(BaseModel):
 class NemotronUpdateRequest(BaseModel):
     nemotron_root_cause: str
     adjusted_threshold: Optional[float] = None
+
+
+def get_cloud_providers_status() -> Dict[str, Any]:
+    gem_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    gem_live = bool(gem_key and gem_key != "your_gemini_key_here" and len(gem_key) >= 15)
+    cld_live = bool(cloudinary_media.cloudinary_enabled)
+    return {
+        "gemini": {
+            "configured": gem_live,
+            "live": gem_live,
+            "mode": "LIVE" if gem_live else "FALLBACK",
+            "detail": f"{GEMINI_MODEL} structured copilot" if gem_live else "Heuristic copilot fallback",
+        },
+        "cloudinary": {
+            "configured": cld_live,
+            "live": cld_live,
+            "mode": "LIVE" if cld_live else "FALLBACK",
+            "detail": "Cloudinary l_overlay active" if cld_live else "Local 512px PNG synthesizer",
+        },
+        "nemotron": get_nemotron_status(),
+        "mariadb": get_mariadb_status(),
+        "modal": get_modal_status(),
+    }
+
+
+def _spawn_background_enrichment(cycle_record: Dict[str, Any]) -> None:
+    cid = str(cycle_record.get("cycle_id", ""))
+    if cid.startswith("CYC-init_") or cid.startswith("init_"):
+        return
+    task = asyncio.create_task(_background_cloud_enrichment(cycle_record))
+    state.background_tasks.add(task)
+    task.add_done_callback(state.background_tasks.discard)
+
+
+async def _background_cloud_enrichment(cycle_record: Dict[str, Any]) -> None:
+    """
+    Runs off the critical robot loop path (0 ms added latency):
+    1. Queries Verda B300 NVIDIA Nemotron 3.5 Super VL for visual root-cause & threshold tuning.
+    2. Dispatches Modal serverless escalation webhook on DEFECTIVE_BOWL / REGRASP_TRIGGERED.
+    3. Broadcasts CYCLE_UPDATED over /ws/live.
+    """
+    cid = str(cycle_record.get("cycle_id", ""))
+    if cid.startswith("CYC-init_") or cid.startswith("init_"):
+        return
+
+    action = cycle_record.get("action", "")
+    needs_modal = action in ("DEFECTIVE_BOWL", "REGRASP_TRIGGERED", "REGRASP_AND_RECHECK")
+
+    coros = [analyze_cycle_with_nemotron(cycle_record)]
+    if needs_modal:
+        coros.append(dispatch_modal_escalation(cycle_record))
+
+    results = await asyncio.gather(*coros, return_exceptions=True)
+
+    nem_res = results[0]
+    if isinstance(nem_res, dict):
+        if not cycle_record.get("nemotron_manual_patch"):
+            root_cause = nem_res.get("root_cause")
+            if root_cause:
+                cycle_record["nemotron_reasoning"] = root_cause
+                cycle_record["root_cause_reasoning"] = root_cause
+            cycle_record["nemotron_provider"] = nem_res.get("provider", "fallback")
+
+        suggested = nem_res.get("suggested_threshold")
+        if suggested is not None and nem_res.get("provider") == "verda_b300":
+            state.active_anomaly_threshold = float(suggested)
+            logger.info("Verda B300 Nemotron auto-tuned threshold to %s", suggested)
+
+    if needs_modal and len(results) > 1 and isinstance(results[1], dict):
+        cycle_record["modal_escalation"] = results[1]
+
+    await manager.broadcast({
+        "type": "CYCLE_UPDATED",
+        "cycle": cycle_record,
+        "active_anomaly_threshold": state.active_anomaly_threshold,
+        "cloud_providers": get_cloud_providers_status(),
+    })
 
 # Background continuous simulation loop
 async def continuous_simulator_loop():
@@ -269,6 +360,8 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
         "destination": "GOOD Bowl (Bowl 1)" if action == "PERFECT_BOWL" else ("DEFECTIVE Bowl (Bowl 2)" if action == "DEFECTIVE_BOWL" else "Inspection Camera (Re-orient)"),
         "root_cause_reasoning": reasoning,
         "nemotron_reasoning": reasoning,
+        "nemotron_provider": "fallback",
+        "similar_defects": [],
         "raw_url": media_res.get("raw_url"),
         "heatmap_url": media_res.get("heatmap_url", media_res.get("composite_heatmap_url")),
         "composite_url": media_res.get("composite_heatmap_url"),
@@ -289,6 +382,10 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
         }
     }
 
+    # Index 512-dim brick vector & find nearest historical defects (MariaDB 11.7+ VECTOR(512) / cosine fallback)
+    emb = compute_brick_embedding(cycle_record.get("raw_url"), chosen_color, defect_label, score)
+    cycle_record["similar_defects"] = await record_cycle_and_find_similar(cycle_record, emb, top_k=3)
+
     # Store in memory (latest first, keep max 40)
     state.recent_cycles.insert(0, cycle_record)
     if len(state.recent_cycles) > 40:
@@ -299,7 +396,11 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
         "type": "NEW_CYCLE",
         "cycle": cycle_record,
         "hardware_metrics": state.hardware_metrics,
+        "cloud_providers": get_cloud_providers_status(),
     })
+
+    # Trigger async cloud enrichment (Verda B300 Nemotron + Modal escalation webhook) off critical path
+    _spawn_background_enrichment(cycle_record)
 
     await set_stage("IDLE")
     return cycle_record
@@ -338,6 +439,8 @@ async def lifespan(app: FastAPI):
             "destination": dest,
             "root_cause_reasoning": reason,
             "nemotron_reasoning": reason,
+            "nemotron_provider": "fallback",
+            "similar_defects": [],
             "raw_url": media.get("raw_url"),
             "heatmap_url": media.get("heatmap_url", media.get("composite_heatmap_url")),
             "composite_url": media.get("composite_heatmap_url"),
@@ -357,6 +460,8 @@ async def lifespan(app: FastAPI):
                 "kinematics": "CPU (Intel TCC)",
             }
         }
+        emb = compute_brick_embedding(rec.get("raw_url"), col, def_lbl, sc)
+        rec["similar_defects"] = await record_cycle_and_find_similar(rec, emb, top_k=3)
         state.recent_cycles.append(rec)
         state.hardware_metrics["total_cycles_processed"] += 1
         if act == "PERFECT_BOWL":
@@ -366,11 +471,18 @@ async def lifespan(app: FastAPI):
         else:
             state.hardware_metrics["regrasp_count"] += 1
 
+    # Backfill nearest neighbors across all 4 seed cycles (note: no background Nemotron/Modal calls on init_*)
+    for rec in state.recent_cycles:
+        rec["similar_defects"] = await find_similar_for_cycle_id(rec["cycle_id"], top_k=3)
+
     yield
     # Shutdown
     if state.simulation_task and not state.simulation_task.done():
         state.simulation_running = False
         state.simulation_task.cancel()
+    for bg_task in list(state.background_tasks):
+        if not bg_task.done():
+            bg_task.cancel()
     logger.info("FastAPI Server Shutdown complete.")
 
 app = FastAPI(
@@ -402,6 +514,7 @@ async def websocket_live_endpoint(websocket: WebSocket):
             "recent_cycles": state.recent_cycles,
             "hardware_metrics": state.hardware_metrics,
             "simulation_running": state.simulation_running,
+            "cloud_providers": get_cloud_providers_status(),
         })
         while True:
             # Keep connection open and receive any ping/command from dashboard
@@ -425,6 +538,7 @@ async def health_check():
         "platform": state.hardware_metrics["platform"],
         "active_rules_count": len(state.active_rules),
         "total_cycles": state.hardware_metrics["total_cycles_processed"],
+        "cloud_providers": get_cloud_providers_status(),
     }
 
 @app.get("/api/state")
@@ -436,6 +550,7 @@ async def get_full_state():
         "recent_cycles": state.recent_cycles,
         "hardware_metrics": state.hardware_metrics,
         "simulation_running": state.simulation_running,
+        "cloud_providers": get_cloud_providers_status(),
     }
 
 @app.get("/api/policy")
@@ -475,6 +590,7 @@ async def update_cycle_nemotron(brick_uuid: str, update: NemotronUpdateRequest):
         if cyc.get("cycle_id") == target_id or cyc.get("cycle_id") == f"CYC-{brick_uuid}":
             cyc["nemotron_reasoning"] = update.nemotron_root_cause
             cyc["root_cause_reasoning"] = update.nemotron_root_cause
+            cyc["nemotron_manual_patch"] = True
             found_cycle = cyc
             break
 
@@ -489,6 +605,7 @@ async def update_cycle_nemotron(brick_uuid: str, update: NemotronUpdateRequest):
         "type": "CYCLE_UPDATED",
         "cycle": found_cycle,
         "active_anomaly_threshold": state.active_anomaly_threshold,
+        "cloud_providers": get_cloud_providers_status(),
     })
 
     return {
@@ -498,11 +615,29 @@ async def update_cycle_nemotron(brick_uuid: str, update: NemotronUpdateRequest):
         "active_anomaly_threshold": state.active_anomaly_threshold,
     }
 
+
+@app.get("/api/cycles/{cycle_id}/similar")
+async def get_similar_cycles(cycle_id: str, top_k: int = 3):
+    """
+    Queries MariaDB 11.7+ VECTOR(512) (VEC_DISTANCE_COSINE) or the in-memory 512-dim
+    cosine similarity fallback for the top-k nearest historical inspection cycles.
+    """
+    matches = await find_similar_for_cycle_id(cycle_id, top_k=max(1, min(top_k, 10)))
+    db_status = get_mariadb_status()
+    return {
+        "status": "success",
+        "cycle_id": cycle_id,
+        "provider": db_status.get("mode", "FALLBACK"),
+        "detail": db_status.get("detail", ""),
+        "similar_defects": matches,
+    }
+
+
 @app.post("/api/cycles")
 async def ingest_edge_telemetry(payload: CycleIngestRequest):
     """
     Ingests live telemetry streamed from Member 2/3 robot state machine & Anomalib/VLA models.
-    Broadcasts cycle to all dashboard WebSocket clients.
+    Broadcasts cycle to all dashboard WebSocket clients and dispatches async cloud enrichment.
     """
     brick_uuid = payload.brick_uuid or str(uuid.uuid4())[:8]
 
@@ -532,6 +667,8 @@ async def ingest_edge_telemetry(payload: CycleIngestRequest):
         "destination": "GOOD Bowl (Bowl 1)" if payload.action == "PERFECT_BOWL" else ("DEFECTIVE Bowl (Bowl 2)" if payload.action == "DEFECTIVE_BOWL" else "Inspection Camera (Re-orient)"),
         "root_cause_reasoning": reason_text,
         "nemotron_reasoning": reason_text,
+        "nemotron_provider": "fallback",
+        "similar_defects": [],
         "raw_url": media_res.get("raw_url"),
         "heatmap_url": media_res.get("heatmap_url", media_res.get("composite_heatmap_url")),
         "composite_url": media_res.get("composite_heatmap_url"),
@@ -552,6 +689,14 @@ async def ingest_edge_telemetry(payload: CycleIngestRequest):
         }
     }
 
+    emb = compute_brick_embedding(
+        payload.raw_image_b64 or cycle_record.get("raw_url"),
+        payload.color,
+        payload.defect_label,
+        payload.anomaly_score,
+    )
+    cycle_record["similar_defects"] = await record_cycle_and_find_similar(cycle_record, emb, top_k=3)
+
     state.recent_cycles.insert(0, cycle_record)
     if len(state.recent_cycles) > 40:
         state.recent_cycles.pop()
@@ -569,7 +714,10 @@ async def ingest_edge_telemetry(payload: CycleIngestRequest):
         "type": "NEW_CYCLE",
         "cycle": cycle_record,
         "hardware_metrics": state.hardware_metrics,
+        "cloud_providers": get_cloud_providers_status(),
     })
+
+    _spawn_background_enrichment(cycle_record)
 
     return {"status": "success", "cycle_id": cycle_record["cycle_id"]}
 
@@ -669,10 +817,11 @@ async def delete_copilot_rule(rule_id: str):
 @app.post("/mock-modal")
 async def mock_modal_webhook(payload: Dict[str, Any]):
     """
-    Mock endpoint simulating the Modal GPU training webhook (Slide 8).
+    Local mock endpoint simulating the Modal serverless escalation & retraining webhook.
+    Uses the exact same audit evaluator as `modal deploy backend/modal_webhook.py`.
     """
-    logger.info(f"Received Modal training callback: {payload}")
-    return {"status": "acknowledged", "job_id": f"modal-{uuid.uuid4()}"}
+    logger.info("Received local Modal escalation callback for cycle: %s", payload.get("cycle_id", "unknown"))
+    return evaluate_escalation_payload(payload)
 
 if __name__ == "__main__":
     import uvicorn
