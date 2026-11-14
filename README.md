@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/hero.png" alt="Team NightShift — Physical AI. Real-world action." width="100%" />
+</p>
+
 # 🏭 Junction Helsinki 2026 — Intel Physical AI Challenge
 ## Team NightShift | Autonomous Duplo Brick Robotic Inspection Cell
 > **Lead Author:** Unified Cloud, AI & Data Hub Lead (Merged Member 3 + Member 4) — *Gemini 3.8 Copilot, Verda B300 Nemotron, MariaDB Vector Store, Modal Escalation, Cloudinary Media & Mission Control UI*
@@ -23,6 +27,10 @@ Built in **Python FastAPI** and **React + Vite + Tailwind CSS**, the hub deliver
 ---
 
 ## 🏛 System Architecture
+
+<p align="center">
+  <img src="docs/images/architecture.png" alt="NightShift System Architecture — A closed loop. Not just a prediction." width="100%" />
+</p>
 
 ```
                                 +------------------------------------------+

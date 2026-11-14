@@ -17,6 +17,8 @@
 
 ## 2. System Architecture & Station Hardware
 
+![NightShift System Architecture — A closed loop. Not just a prediction.](docs/images/architecture.png)
+
 * **Golden Architectural Rule:** The physical robot control loop stays **100% local** on the Intel Core Ultra X9 388H laptop via OpenVINO (<36 ms target loop). All cloud AI models (Gemini, Nemotron, Modal, MariaDB, Cloudinary) run **asynchronously off the critical path** so network latency never slows or breaks robot execution.
 * **Physical Station Hardware (On Desk):**
   * **Laptop:** HP OmniBook Ultra (C2NM8AV) or Dell XPS 16 (DA16260) with **Intel Core Ultra X9 Series 3 (388H)**, 64 GB RAM, Ubuntu v26.04, pre-installed NPU/iGPU drivers (up to 180 platform TOPS).
