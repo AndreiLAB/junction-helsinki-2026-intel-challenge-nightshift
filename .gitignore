@@ -26,6 +26,7 @@ backend/.env
 # Logs & temp
 *.log
 ~$*
+.mariadb/
 team_repo_temp/
 physical_ai_studio_ref/
 anomalib_ref/

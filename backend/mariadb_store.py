@@ -24,11 +24,18 @@ import urllib.parse
 import uuid
 from typing import Any, Optional
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from PIL import Image
 
+_DOTENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
 # Load backend/.env without overriding already-exported environment variables.
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"), override=False)
+load_dotenv(dotenv_path=_DOTENV_PATH, override=False)
+
+for _scheme in ("mariadb", "mysql", "mariadb+pymysql", "mysql+pymysql"):
+    if _scheme not in urllib.parse.uses_netloc:
+        urllib.parse.uses_netloc.append(_scheme)
+    if _scheme not in urllib.parse.uses_query:
+        urllib.parse.uses_query.append(_scheme)
 
 logger = logging.getLogger("mariadb_store")
 
@@ -48,6 +55,7 @@ DEFAULT_DATABASE = "junction_physical_ai"
 
 # Module-level state for MariaDB health and 200-entry in-memory vector store
 _memory_records: list[dict[str, Any]] = []
+_memory_policy_history: list[dict[str, Any]] = []
 _memory_lock = threading.Lock()
 _db_lock = threading.Lock()
 _db_live: bool = False
@@ -83,7 +91,8 @@ _COLOR_PALETTE_NORM: dict[str, tuple[float, float, float]] = {
 
 _CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS inspection_cycles (
-    cycle_id VARCHAR(64) PRIMARY KEY,
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    cycle_id VARCHAR(64) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     color VARCHAR(32),
     defect_label VARCHAR(128),
@@ -97,8 +106,31 @@ CREATE TABLE IF NOT EXISTS inspection_cycles (
     composite_url MEDIUMTEXT,
     nemotron_reasoning TEXT,
     embedding VECTOR(512) NOT NULL,
+    UNIQUE KEY uq_cycle_id (cycle_id),
+    VECTOR INDEX idx_cycle_embedding (embedding) M=8 DISTANCE=cosine
+) ENGINE=InnoDB
+"""
+
+_CREATE_TABLE_FALLBACK_SQL = """
+CREATE TABLE IF NOT EXISTS inspection_cycles (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    cycle_id VARCHAR(64) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    color VARCHAR(32),
+    defect_label VARCHAR(128),
+    anomaly_score FLOAT,
+    action VARCHAR(32),
+    npu_ms FLOAT,
+    igpu_ms FLOAT,
+    cpu_ms FLOAT,
+    total_ms FLOAT,
+    raw_url MEDIUMTEXT,
+    composite_url MEDIUMTEXT,
+    nemotron_reasoning TEXT,
+    embedding VECTOR(512) NOT NULL,
+    UNIQUE KEY uq_cycle_id (cycle_id),
     VECTOR INDEX idx_cycle_embedding (embedding)
-)
+) ENGINE=InnoDB
 """
 
 _FIND_SIMILAR_SQL = (
@@ -142,6 +174,53 @@ ON DUPLICATE KEY UPDATE
     embedding = VALUES(embedding)
 """
 
+_CREATE_POLICIES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS sorting_policies (
+    policy_id VARCHAR(64) PRIMARY KEY,
+    source VARCHAR(32) NOT NULL,
+    event_type VARCHAR(32) NOT NULL,
+    target_brick_color VARCHAR(32),
+    defect_description VARCHAR(255),
+    action_on_match VARCHAR(32),
+    anomaly_threshold FLOAT NOT NULL,
+    active_global_threshold FLOAT NOT NULL,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    reasoning TEXT
+) WITH SYSTEM VERSIONING ENGINE=InnoDB
+"""
+
+_UPSERT_POLICY_SQL = """
+INSERT INTO sorting_policies (
+    policy_id, source, event_type, target_brick_color, defect_description,
+    action_on_match, anomaly_threshold, active_global_threshold, is_active, reasoning
+) VALUES (
+    %s, %s, %s, %s, %s,
+    %s, %s, %s, %s, %s
+)
+ON DUPLICATE KEY UPDATE
+    source = VALUES(source),
+    event_type = VALUES(event_type),
+    target_brick_color = VALUES(target_brick_color),
+    defect_description = VALUES(defect_description),
+    action_on_match = VALUES(action_on_match),
+    anomaly_threshold = VALUES(anomaly_threshold),
+    active_global_threshold = VALUES(active_global_threshold),
+    is_active = VALUES(is_active),
+    reasoning = VALUES(reasoning)
+"""
+
+_QUERY_POLICY_HISTORY_SQL = (
+    "SELECT policy_id, source, event_type, target_brick_color, defect_description, "
+    "action_on_match, anomaly_threshold, active_global_threshold, is_active, reasoning, "
+    "DATE_FORMAT(row_start, '%%Y-%%m-%%d %%H:%%i:%%s.%%f') AS valid_from, "
+    "IF(YEAR(row_end) >= 2038, NULL, DATE_FORMAT(row_end, '%%Y-%%m-%%d %%H:%%i:%%s.%%f')) AS valid_to, "
+    "IF(YEAR(row_end) >= 2038, 1, 0) AS is_current "
+    "FROM sorting_policies "
+    "FOR SYSTEM_TIME ALL "
+    "ORDER BY row_start DESC "
+    "LIMIT %s"
+)
+
 
 def _is_placeholder(value: Optional[str]) -> bool:
     if value is None:
@@ -152,42 +231,106 @@ def _is_placeholder(value: Optional[str]) -> bool:
     return any(marker in cleaned for marker in _PLACEHOLDER_MARKERS)
 
 
-def _build_ssl_param(ssl_setting: Optional[str], ssl_ca: Optional[str] = None) -> Any:
-    if ssl_ca and os.path.isfile(ssl_ca):
-        return {"ca": ssl_ca}
+_LOCAL_DB_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 
-    if not ssl_setting:
-        return None
 
-    val = ssl_setting.strip()
+def _is_local_host(host: Optional[str]) -> bool:
+    if not host:
+        return True
+    cleaned = host.strip().lower()
+    return cleaned in _LOCAL_DB_HOSTS or cleaned.endswith(".localhost")
+
+
+def _read_env_setting(key: str, dotenv_cache: Optional[dict[str, Optional[str]]] = None) -> str:
+    val = os.environ.get(key)
+    if val is not None and val.strip():
+        return val.strip()
+    if dotenv_cache is not None:
+        raw = dotenv_cache.get(key)
+        if raw is not None and str(raw).strip():
+            return str(raw).strip()
+    return ""
+
+
+def _create_encrypted_tls_context() -> ssl.SSLContext:
+    """
+    Creates a TLS 1.2+ client context matching MySQL/MariaDB `ssl_mode=REQUIRED`
+    (encrypted transport without failing when hosted DBs use provider-private CAs).
+    """
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _build_ssl_param(
+    ssl_setting: Optional[str],
+    host: Optional[str] = None,
+    ssl_ca: Optional[str] = None,
+) -> Any:
+    val = (ssl_setting or "").strip()
     val_lower = val.lower()
+
+    # Explicit disable via MARIADB_SSL=false / ?ssl=false / ?ssl_mode=DISABLED
     if val_lower in ("0", "false", "no", "off", "disable", "disabled"):
         return None
-    if os.path.isfile(val):
-        return {"ca": val}
-    if val_lower in ("skip-verify", "insecure", "allow"):
+
+    if ssl_ca and os.path.isfile(ssl_ca):
+        return ssl.create_default_context(cafile=ssl_ca)
+
+    if val and os.path.isfile(val):
+        return ssl.create_default_context(cafile=val)
+
+    if val_lower == "verify_identity":
+        return ssl.create_default_context()
+
+    if val_lower == "verify_ca":
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
         return ctx
-    if val_lower in ("1", "true", "yes", "on", "required", "verify_ca", "verify_identity"):
-        return ssl.create_default_context()
+
+    if val_lower in (
+        "1",
+        "true",
+        "yes",
+        "on",
+        "required",
+        "preferred",
+        "skip-verify",
+        "insecure",
+        "allow",
+    ):
+        return _create_encrypted_tls_context()
+
+    # Automatically enable TLS when connecting to any non-localhost (cloud/hosted) MariaDB
+    if host and not _is_local_host(host):
+        return _create_encrypted_tls_context()
+
     return None
 
 
 def _parse_db_config() -> Optional[dict[str, Any]]:
     """
-    Resolves MariaDB connection parameters from MARIADB_URI or discrete MARIADB_* env vars.
+    Resolves MariaDB connection parameters from MARIADB_URI (`mysql://` or `mariadb://`)
+    or discrete MARIADB_* env vars (including live reloads from `backend/.env`).
     Returns None when unconfigured or set to placeholder values.
     """
-    uri = os.environ.get("MARIADB_URI", "").strip()
-    env_ssl = os.environ.get("MARIADB_SSL", "").strip()
-    default_db = os.environ.get("MARIADB_DATABASE", DEFAULT_DATABASE).strip() or DEFAULT_DATABASE
+    dotenv_cache: dict[str, Optional[str]] = {}
+    if os.path.isfile(_DOTENV_PATH):
+        try:
+            dotenv_cache = dotenv_values(_DOTENV_PATH)
+        except Exception:
+            dotenv_cache = {}
+
+    uri = _read_env_setting("MARIADB_URI", dotenv_cache)
+    env_ssl = _read_env_setting("MARIADB_SSL", dotenv_cache)
+    env_ssl_ca = _read_env_setting("MARIADB_SSL_CA", dotenv_cache) or None
+    default_db = _read_env_setting("MARIADB_DATABASE", dotenv_cache) or DEFAULT_DATABASE
 
     if uri and not _is_placeholder(uri):
         parsed = urllib.parse.urlparse(uri)
-        scheme = (parsed.scheme or "").lower()
-        if scheme.startswith(("mysql", "mariadb")) and parsed.hostname and not _is_placeholder(parsed.hostname):
+        base_scheme = (parsed.scheme or "").lower().split("+", 1)[0]
+        if base_scheme in ("mysql", "mariadb") and parsed.hostname and not _is_placeholder(parsed.hostname):
             try:
                 port = int(parsed.port or DEFAULT_PORT)
             except ValueError:
@@ -201,9 +344,17 @@ def _parse_db_config() -> Optional[dict[str, Any]]:
             if _is_placeholder(database):
                 database = DEFAULT_DATABASE
 
-            query_params = urllib.parse.parse_qs(parsed.query)
-            uri_ssl = (query_params.get("ssl", [""])[0] or query_params.get("ssl_mode", [""])[0] or env_ssl)
-            uri_ssl_ca = query_params.get("ssl_ca", [""])[0] or None
+            query_params = {
+                k.lower().replace("-", "_"): v
+                for k, v in urllib.parse.parse_qs(parsed.query).items()
+            }
+            uri_ssl = (
+                query_params.get("ssl", [""])[0]
+                or query_params.get("tls", [""])[0]
+                or query_params.get("ssl_mode", [""])[0]
+                or env_ssl
+            )
+            uri_ssl_ca = query_params.get("ssl_ca", [""])[0] or env_ssl_ca
 
             return {
                 "host": parsed.hostname,
@@ -211,22 +362,25 @@ def _parse_db_config() -> Optional[dict[str, Any]]:
                 "user": user,
                 "password": password,
                 "database": database,
-                "ssl": _build_ssl_param(uri_ssl, ssl_ca=uri_ssl_ca),
+                "ssl": _build_ssl_param(uri_ssl, host=parsed.hostname, ssl_ca=uri_ssl_ca),
             }
 
-    host = os.environ.get("MARIADB_HOST", "").strip()
+    host = _read_env_setting("MARIADB_HOST", dotenv_cache)
     if not host or _is_placeholder(host):
         return None
 
-    user = os.environ.get("MARIADB_USER", "root").strip() or "root"
+    user = _read_env_setting("MARIADB_USER", dotenv_cache) or "root"
     if _is_placeholder(user):
         return None
 
-    password = os.environ.get("MARIADB_PASSWORD", "")
+    password = os.environ.get("MARIADB_PASSWORD")
+    if password is None and dotenv_cache:
+        password = dotenv_cache.get("MARIADB_PASSWORD") or ""
+    password = password or ""
     if password and _is_placeholder(password):
         return None
 
-    port_raw = os.environ.get("MARIADB_PORT", str(DEFAULT_PORT)).strip()
+    port_raw = _read_env_setting("MARIADB_PORT", dotenv_cache) or str(DEFAULT_PORT)
     try:
         port = int(port_raw) if port_raw else DEFAULT_PORT
     except ValueError:
@@ -240,7 +394,7 @@ def _parse_db_config() -> Optional[dict[str, Any]]:
         "user": user,
         "password": password,
         "database": database,
-        "ssl": _build_ssl_param(env_ssl),
+        "ssl": _build_ssl_param(env_ssl, host=host, ssl_ca=env_ssl_ca),
     }
 
 
@@ -706,9 +860,9 @@ def _open_pymysql_connection(cfg: dict[str, Any], include_db: bool = True) -> An
         "password": cfg["password"],
         "charset": "utf8mb4",
         "autocommit": True,
-        "connect_timeout": 3,
-        "read_timeout": 5,
-        "write_timeout": 5,
+        "connect_timeout": 6,
+        "read_timeout": 8,
+        "write_timeout": 8,
         "cursorclass": pymysql.cursors.DictCursor,
     }
     if include_db and cfg.get("database"):
@@ -721,7 +875,7 @@ def _open_pymysql_connection(cfg: dict[str, Any], include_db: bool = True) -> An
 def _connect_and_ensure_schema(cfg: dict[str, Any]) -> Any:
     """
     Opens a PyMySQL connection to MariaDB 11.7+ and ensures `inspection_cycles`
-    with `VECTOR(512)` and `VECTOR INDEX` exists.
+    with `VECTOR(512)` and `VECTOR INDEX` (`M=8 DISTANCE=cosine`) exists.
     """
     global _schema_initialized_key
     target_key = (str(cfg["host"]), int(cfg["port"]), str(cfg["database"]))
@@ -749,7 +903,24 @@ def _connect_and_ensure_schema(cfg: dict[str, Any]) -> Any:
     if needs_init:
         try:
             with conn.cursor() as cur:
-                cur.execute(_CREATE_TABLE_SQL)
+                cur.execute("SHOW TABLES LIKE 'inspection_cycles'")
+                if not cur.fetchone():
+                    try:
+                        cur.execute(_CREATE_TABLE_SQL)
+                    except Exception as ddl_exc:
+                        ddl_code = ddl_exc.args[0] if getattr(ddl_exc, "args", None) else None
+                        if ddl_code == 1064:
+                            cur.execute(_CREATE_TABLE_FALLBACK_SQL)
+                        elif ddl_code != 1050:
+                            raise
+                cur.execute("SHOW TABLES LIKE 'sorting_policies'")
+                if not cur.fetchone():
+                    try:
+                        cur.execute(_CREATE_POLICIES_TABLE_SQL)
+                    except Exception as pol_exc:
+                        pol_code = pol_exc.args[0] if getattr(pol_exc, "args", None) else None
+                        if pol_code != 1050:
+                            raise
             with _db_lock:
                 _schema_initialized_key = target_key
         except Exception:
@@ -1025,9 +1196,167 @@ async def find_similar_for_cycle_id(cycle_id: str, top_k: int = 3) -> list[dict[
     )
 
 
+def _record_memory_policy_event(entry: dict[str, Any]) -> None:
+    import datetime
+
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+    with _memory_lock:
+        for existing in _memory_policy_history:
+            if existing.get("policy_id") == entry["policy_id"] and existing.get("is_current"):
+                existing["valid_to"] = now_str
+                existing["is_current"] = False
+        _memory_policy_history.insert(
+            0,
+            {
+                **entry,
+                "valid_from": now_str,
+                "valid_to": None,
+                "is_current": True,
+            },
+        )
+        if len(_memory_policy_history) > MEMORY_CAP:
+            del _memory_policy_history[MEMORY_CAP:]
+
+
+def _db_record_policy_sync(cfg: dict[str, Any], params: tuple[Any, ...]) -> None:
+    conn = _connect_and_ensure_schema(cfg)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_UPSERT_POLICY_SQL, params)
+    finally:
+        conn.close()
+
+
+def _db_query_policy_history_sync(cfg: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    conn = _connect_and_ensure_schema(cfg)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_QUERY_POLICY_HISTORY_SQL, (max(1, min(int(limit), 200)),))
+            rows = cur.fetchall() or []
+            history: list[dict[str, Any]] = []
+            for r in rows:
+                history.append(
+                    {
+                        "policy_id": str(r.get("policy_id") or ""),
+                        "source": str(r.get("source") or ""),
+                        "event_type": str(r.get("event_type") or ""),
+                        "target_brick_color": str(r.get("target_brick_color") or "any"),
+                        "defect_description": str(r.get("defect_description") or ""),
+                        "action_on_match": str(r.get("action_on_match") or ""),
+                        "anomaly_threshold": round(float(r.get("anomaly_threshold") or 0.55), 4),
+                        "active_global_threshold": round(float(r.get("active_global_threshold") or 0.55), 4),
+                        "is_active": bool(r.get("is_active")),
+                        "reasoning": str(r.get("reasoning") or ""),
+                        "valid_from": r.get("valid_from"),
+                        "valid_to": r.get("valid_to"),
+                        "is_current": bool(r.get("is_current")),
+                    }
+                )
+            return history
+    finally:
+        conn.close()
+
+
+async def record_policy_change(
+    policy_id: str,
+    source: str,
+    event_type: str,
+    anomaly_threshold: float,
+    active_global_threshold: float,
+    target_brick_color: str = "any",
+    defect_description: str = "",
+    action_on_match: str = "DEFECTIVE_BOWL",
+    is_active: bool = True,
+    reasoning: str = "",
+) -> bool:
+    """
+    Logs a sorting rule mutation or dynamic threshold update into MariaDB's
+    temporal `sorting_policies` (`WITH SYSTEM VERSIONING`) table, preserving full
+    point-in-time `FOR SYSTEM_TIME ALL` history (plus in-memory fallback).
+    """
+    global _db_live
+
+    clean_entry = {
+        "policy_id": str(policy_id or "global_anomaly_threshold")[:64],
+        "source": str(source or "system")[:32],
+        "event_type": str(event_type or "POLICY_UPDATED")[:32],
+        "target_brick_color": str(target_brick_color or "any")[:32],
+        "defect_description": str(defect_description or "")[:255],
+        "action_on_match": str(action_on_match or "DEFECTIVE_BOWL")[:32],
+        "anomaly_threshold": round(float(anomaly_threshold), 4),
+        "active_global_threshold": round(float(active_global_threshold), 4),
+        "is_active": bool(is_active),
+        "reasoning": str(reasoning or ""),
+    }
+    _record_memory_policy_event(clean_entry)
+
+    cfg = _parse_db_config()
+    if cfg is not None and _PYMYSQL_AVAILABLE:
+        params = (
+            clean_entry["policy_id"],
+            clean_entry["source"],
+            clean_entry["event_type"],
+            clean_entry["target_brick_color"],
+            clean_entry["defect_description"],
+            clean_entry["action_on_match"],
+            clean_entry["anomaly_threshold"],
+            clean_entry["active_global_threshold"],
+            1 if clean_entry["is_active"] else 0,
+            clean_entry["reasoning"],
+        )
+        try:
+            await asyncio.to_thread(_db_record_policy_sync, cfg, params)
+            _db_live = True
+            return True
+        except Exception as exc:
+            _db_live = False
+            logger.warning(
+                "MariaDB temporal policy write failed (%s); recorded in memory.",
+                type(exc).__name__,
+            )
+    return False
+
+
+async def get_policy_history(limit: int = 50) -> dict[str, Any]:
+    """
+    Queries `SELECT ... FROM sorting_policies FOR SYSTEM_TIME ALL` in MariaDB 11.7+
+    to return the full temporal audit trail of Gemini Copilot rules and Nemotron
+    threshold calibrations (with seamless in-memory fallback).
+    """
+    global _db_live
+
+    clamped_limit = max(1, min(int(limit), 200))
+    cfg = _parse_db_config()
+    if cfg is not None and _PYMYSQL_AVAILABLE:
+        try:
+            rows = await asyncio.to_thread(_db_query_policy_history_sync, cfg, clamped_limit)
+            _db_live = True
+            return {
+                "provider": "LIVE",
+                "feature": "MariaDB WITH SYSTEM VERSIONING (FOR SYSTEM_TIME ALL)",
+                "count": len(rows),
+                "history": rows,
+            }
+        except Exception as exc:
+            _db_live = False
+            logger.warning(
+                "MariaDB temporal history query failed (%s); using in-memory fallback.",
+                type(exc).__name__,
+            )
+
+    with _memory_lock:
+        fallback_rows = [dict(item) for item in _memory_policy_history[:clamped_limit]]
+    return {
+        "provider": "FALLBACK",
+        "feature": "In-memory temporal policy log",
+        "count": len(fallback_rows),
+        "history": fallback_rows,
+    }
+
+
 def get_mariadb_status() -> dict[str, Any]:
     """
-    Returns current MariaDB 11.7+ vector store configuration and liveness status.
+    Returns current MariaDB 11.7+ vector + temporal store configuration and liveness status.
     """
     configured = _parse_db_config() is not None
     live = bool(configured and _PYMYSQL_AVAILABLE and _db_live)
@@ -1036,7 +1365,7 @@ def get_mariadb_status() -> dict[str, Any]:
             "configured": True,
             "live": True,
             "mode": "LIVE",
-            "detail": "MariaDB 11.7+ VECTOR(512)",
+            "detail": "MariaDB 11.8 VECTOR(512) + SYSTEM VERSIONING",
         }
     return {
         "configured": configured,

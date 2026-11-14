@@ -18,6 +18,8 @@ from mariadb_store import (
     compute_brick_embedding,
     record_cycle_and_find_similar,
     find_similar_for_cycle_id,
+    record_policy_change,
+    get_policy_history,
     get_mariadb_status,
 )
 from nemotron_worker import analyze_cycle_with_nemotron, get_nemotron_status
@@ -203,13 +205,21 @@ async def _background_cloud_enrichment(cycle_record: Dict[str, Any]) -> None:
     action = cycle_record.get("action", "")
     needs_modal = action in ("DEFECTIVE_BOWL", "REGRASP_TRIGGERED", "REGRASP_AND_RECHECK")
 
-    coros = [analyze_cycle_with_nemotron(cycle_record)]
     if needs_modal:
-        coros.append(dispatch_modal_escalation(cycle_record))
+        try:
+            modal_res = await dispatch_modal_escalation(cycle_record)
+            if isinstance(modal_res, dict):
+                cycle_record["modal_escalation"] = modal_res
+                await manager.broadcast({
+                    "type": "CYCLE_UPDATED",
+                    "cycle": cycle_record,
+                    "active_anomaly_threshold": state.active_anomaly_threshold,
+                    "cloud_providers": get_cloud_providers_status(),
+                })
+        except Exception as exc:
+            logger.warning("Modal background escalation error: %s", type(exc).__name__)
 
-    results = await asyncio.gather(*coros, return_exceptions=True)
-
-    nem_res = results[0]
+    nem_res = await analyze_cycle_with_nemotron(cycle_record)
     if isinstance(nem_res, dict):
         if not cycle_record.get("nemotron_manual_patch"):
             root_cause = nem_res.get("root_cause")
@@ -222,9 +232,18 @@ async def _background_cloud_enrichment(cycle_record: Dict[str, Any]) -> None:
         if suggested is not None and nem_res.get("provider") == "verda_b300":
             state.active_anomaly_threshold = float(suggested)
             logger.info("Verda B300 Nemotron auto-tuned threshold to %s", suggested)
-
-    if needs_modal and len(results) > 1 and isinstance(results[1], dict):
-        cycle_record["modal_escalation"] = results[1]
+            await record_policy_change(
+                policy_id="global_anomaly_threshold",
+                source="verda_b300_nemotron",
+                event_type="THRESHOLD_TUNED",
+                anomaly_threshold=state.active_anomaly_threshold,
+                active_global_threshold=state.active_anomaly_threshold,
+                target_brick_color=str(cycle_record.get("color", "any")),
+                defect_description=str(cycle_record.get("defect_label", "")),
+                action_on_match=str(cycle_record.get("action", "DEFECTIVE_BOWL")),
+                is_active=True,
+                reasoning=str(cycle_record.get("nemotron_reasoning", "")),
+            )
 
     await manager.broadcast({
         "type": "CYCLE_UPDATED",
@@ -475,6 +494,33 @@ async def lifespan(app: FastAPI):
     for rec in state.recent_cycles:
         rec["similar_defects"] = await find_similar_for_cycle_id(rec["cycle_id"], top_k=3)
 
+    # Seed baseline policies & global threshold into MariaDB WITH SYSTEM VERSIONING audit table
+    await record_policy_change(
+        policy_id="global_anomaly_threshold",
+        source="system_bootstrap",
+        event_type="THRESHOLD_INIT",
+        anomaly_threshold=state.active_anomaly_threshold,
+        active_global_threshold=state.active_anomaly_threshold,
+        target_brick_color="any",
+        defect_description="Global Anomalib PatchCore decision boundary",
+        action_on_match="DEFECTIVE_BOWL",
+        is_active=True,
+        reasoning="Initial calibrated threshold for Intel Core Ultra 50 TOPS NPU PatchCore.",
+    )
+    for r in state.active_rules:
+        await record_policy_change(
+            policy_id=r.rule_id,
+            source="system_bootstrap",
+            event_type="RULE_INIT",
+            anomaly_threshold=r.anomaly_threshold,
+            active_global_threshold=state.active_anomaly_threshold,
+            target_brick_color=r.target_brick_color,
+            defect_description=r.defect_description,
+            action_on_match=r.action_on_match,
+            is_active=getattr(r, "active", True),
+            reasoning=r.reasoning,
+        )
+
     yield
     # Shutdown
     if state.simulation_task and not state.simulation_task.done():
@@ -600,6 +646,18 @@ async def update_cycle_nemotron(brick_uuid: str, update: NemotronUpdateRequest):
     if update.adjusted_threshold is not None:
         state.active_anomaly_threshold = float(update.adjusted_threshold)
         logger.info(f"Nemotron updated active anomaly threshold to {update.adjusted_threshold}")
+        await record_policy_change(
+            policy_id="global_anomaly_threshold",
+            source="nemotron_worker",
+            event_type="THRESHOLD_TUNED",
+            anomaly_threshold=state.active_anomaly_threshold,
+            active_global_threshold=state.active_anomaly_threshold,
+            target_brick_color=str(found_cycle.get("color", "any")),
+            defect_description=str(found_cycle.get("defect_label", "")),
+            action_on_match=str(found_cycle.get("action", "DEFECTIVE_BOWL")),
+            is_active=True,
+            reasoning=update.nemotron_root_cause,
+        )
 
     await manager.broadcast({
         "type": "CYCLE_UPDATED",
@@ -613,6 +671,20 @@ async def update_cycle_nemotron(brick_uuid: str, update: NemotronUpdateRequest):
         "cycle_id": target_id,
         "nemotron_root_cause": update.nemotron_root_cause,
         "active_anomaly_threshold": state.active_anomaly_threshold,
+    }
+
+
+@app.get("/api/policies/history")
+async def get_sorting_policies_history(limit: int = 50):
+    """
+    Returns the temporal audit trail of sorting policies and dynamic anomaly threshold
+    mutations powered by MariaDB `WITH SYSTEM VERSIONING` (`FOR SYSTEM_TIME ALL`).
+    """
+    res = await get_policy_history(limit=limit)
+    return {
+        "status": "success",
+        "active_anomaly_threshold": state.active_anomaly_threshold,
+        **res,
     }
 
 
@@ -787,6 +859,19 @@ async def create_copilot_rule(
         state.active_anomaly_threshold = float(rule.anomaly_threshold)
         logger.info(f"Gemini Copilot updated active anomaly threshold to {rule.anomaly_threshold}")
 
+    await record_policy_change(
+        policy_id=rule.rule_id,
+        source="gemini_copilot",
+        event_type="RULE_UPDATED" if existing_idx is not None else "RULE_CREATED",
+        anomaly_threshold=float(getattr(rule, "anomaly_threshold", state.active_anomaly_threshold)),
+        active_global_threshold=state.active_anomaly_threshold,
+        target_brick_color=rule.target_brick_color,
+        defect_description=rule.defect_description,
+        action_on_match=rule.action_on_match,
+        is_active=True,
+        reasoning=rule.reasoning,
+    )
+
     # Broadcast updated rules over WebSocket
     await manager.broadcast({
         "type": "RULE_CREATED",
@@ -804,9 +889,22 @@ async def create_copilot_rule(
 @app.delete("/api/copilot/rule/{rule_id}")
 async def delete_copilot_rule(rule_id: str):
     """
-    Deletes an active sorting rule.
+    Deletes an active sorting rule and logs temporal deactivation in MariaDB WITH SYSTEM VERSIONING.
     """
+    removed = next((r for r in state.active_rules if r.rule_id == rule_id), None)
     state.active_rules = [r for r in state.active_rules if r.rule_id != rule_id]
+    await record_policy_change(
+        policy_id=rule_id,
+        source="operator_ui",
+        event_type="RULE_DELETED",
+        anomaly_threshold=float(getattr(removed, "anomaly_threshold", state.active_anomaly_threshold)) if removed else state.active_anomaly_threshold,
+        active_global_threshold=state.active_anomaly_threshold,
+        target_brick_color=removed.target_brick_color if removed else "any",
+        defect_description=removed.defect_description if removed else "Deleted sorting rule",
+        action_on_match=removed.action_on_match if removed else "DEFECTIVE_BOWL",
+        is_active=False,
+        reasoning="Deactivated by operator via Mission Control UI.",
+    )
     await manager.broadcast({
         "type": "RULE_DELETED",
         "rule_id": rule_id,
