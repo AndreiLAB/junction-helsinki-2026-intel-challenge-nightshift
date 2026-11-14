@@ -4,37 +4,51 @@
 
 @layer base {
   body {
-    @apply bg-[#0b0f14] text-[#edf2f7] font-sans antialiased selection:bg-[#55dbb1] selection:text-[#0b0f14];
+    @apply bg-[#070a0f] text-[#edf2f7] font-sans antialiased selection:bg-[#55dbb1] selection:text-[#070a0f];
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(85, 219, 177, 0.08), transparent),
+      radial-gradient(ellipse 60% 40% at 90% 10%, rgba(137, 185, 239, 0.06), transparent);
   }
 }
 
-/* Custom Scrollbars */
+/* Precision Optical Scrollbars */
 ::-webkit-scrollbar {
   width: 5px;
   height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #0e131a;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #26313e;
-  border-radius: 3px;
+  background: rgba(142, 155, 174, 0.2);
+  border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #55dbb1;
+  background: rgba(85, 219, 177, 0.6);
 }
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
 
-.scanline {
-  background: linear-gradient(
-    to bottom,
-    rgba(255,255,255,0),
-    rgba(255,255,255,0) 50%,
-    rgba(0, 199, 253, 0.05) 50%,
-    rgba(0, 199, 253, 0.05)
-  );
-  background-size: 100% 3px;
+/* Subtle glass panel surface */
+.glass-panel {
+  background: linear-gradient(180deg, rgba(16, 22, 31, 0.86) 0%, rgba(11, 15, 22, 0.94) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 12px 40px -16px rgba(0, 0, 0, 0.7), inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+}
+
+.glass-subtle {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Optical calibration grid background */
+.optical-grid {
+  background-size: 24px 24px;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
 }

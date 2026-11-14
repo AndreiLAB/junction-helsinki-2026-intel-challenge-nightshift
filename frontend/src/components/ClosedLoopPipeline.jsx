@@ -1,161 +1,116 @@
 import React from 'react';
-import { ArrowRight, Eye, ShieldAlert, Cpu, Bot, Zap } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Eye, ShieldAlert, Cpu, Bot, Sparkles } from 'lucide-react';
 
-function getCellStateStyle(state) {
-  const s = (state || 'HOME').toUpperCase();
-  if (s === 'FAULT') {
-    return 'bg-[#38232c] text-[#f28d95] border-[#f28d95]/40';
-  }
-  if (s === 'NEXT_VIEW' || s === 'REGRASP' || s === 'CHECK_HELD') {
-    return 'bg-[#352e21] text-[#e9bf79] border-[#e9bf79]/40';
-  }
-  if (s === 'PLACE_DEFECT') {
-    return 'bg-[#38232c] text-[#f28d95] border-[#f28d95]/30';
-  }
-  if (s === 'PLACE_GOOD' || s === 'CONFIRM' || s === 'DONE') {
-    return 'bg-[#15352e] text-[#55dbb1] border-[#55dbb1]/30';
-  }
-  if (s === 'INSPECT' || s === 'DECIDE' || s === 'PICK_PRESENT' || s === 'SNAP_TO_INSPECT') {
-    return 'bg-[#18212c] text-[#89b9ef] border-[#89b9ef]/30';
-  }
-  return 'bg-[#18212c] text-[#b5c0ce] border-[#26313e]';
-}
+const STAGES = [
+  { id: 'PERCEIVE', step: '01', title: 'Perceive', sub: 'PICK_PRESENT', icon: Eye },
+  { id: 'DETECT', step: '02', title: 'Detect', sub: 'PatchCore NPU', icon: ShieldAlert },
+  { id: 'REASON', step: '03', title: 'Decide', sub: 't_low / t_high', icon: Cpu },
+  { id: 'ACT', step: '04', title: 'Act', sub: 'VLA SO-101', icon: Bot },
+  { id: 'OPTIMIZE', step: '05', title: 'Audit', sub: 'B300 · MariaDB', icon: Sparkles },
+];
 
-export default function ClosedLoopPipeline({ activeStage, cellState = 'HOME', currentCycle }) {
-  const stages = [
-    {
-      id: 'PERCEIVE',
-      step: '01',
-      title: 'Perceive',
-      sub: 'PICK_PRESENT · Snap',
-      icon: Eye,
-    },
-    {
-      id: 'DETECT',
-      step: '02',
-      title: 'Detect',
-      sub: 'PatchCore · NPU INT8',
-      icon: ShieldAlert,
-    },
-    {
-      id: 'REASON',
-      step: '03',
-      title: 'Decide',
-      sub: 't_low / t_high · Multi-View',
-      icon: Cpu,
-    },
-    {
-      id: 'ACT',
-      step: '04',
-      title: 'Act',
-      sub: 'VLA / ACT · SO-101',
-      icon: Bot,
-    },
-    {
-      id: 'OPTIMIZE',
-      step: '05',
-      title: 'Confirm & Audit',
-      sub: 'Nemotron · MariaDB',
-      icon: Zap,
-    },
-  ];
-
-  const getStageIndex = (stageId) => stages.findIndex(s => s.id === stageId);
-  const currentIdx = getStageIndex(activeStage);
+export default function ClosedLoopPipeline({ activeStage = 'IDLE', cellState = 'HOME', currentCycle }) {
+  const currentIdx = STAGES.findIndex(s => s.id === activeStage);
   const effectiveCellState = (cellState || currentCycle?.cell_state || 'HOME').toUpperCase();
 
-  const getStatusText = () => {
-    if (!activeStage || activeStage === 'IDLE') return 'Idle · ready for next cycle';
-    const current = stages.find(s => s.id === activeStage);
-    return `${current?.title || activeStage} in progress…`;
-  };
+  const isFault = effectiveCellState === 'FAULT';
+  const isRecover =
+    effectiveCellState === 'NEXT_VIEW' ||
+    effectiveCellState === 'REGRASP' ||
+    effectiveCellState === 'CHECK_HELD';
+  const isDefect = effectiveCellState === 'PLACE_DEFECT';
+
+  const stateColor = isFault || isDefect
+    ? 'text-[#f28d95] bg-[#38232c]/60 border-[#f28d95]/30'
+    : isRecover
+    ? 'text-[#e9bf79] bg-[#352e21]/60 border-[#e9bf79]/30'
+    : 'text-[#55dbb1] bg-[#15352e]/60 border-[#55dbb1]/30';
 
   return (
-    <div className="bg-[#121922] border border-[#26313e] rounded-[8px] p-3.5 w-full">
-      {/* Header bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-semibold text-[#8e9bae] tracking-wider uppercase">
-            CLOSED-LOOP PIPELINE
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.35, delay: 0.12 }}
+      className="glass-panel rounded-xl px-4 py-3 w-full"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+        <div className="flex items-center gap-2.5">
+          <span className="text-[10.5px] font-semibold tracking-widest uppercase text-[#8e9bae]">
+            Closed-Loop Sequence
           </span>
           {currentCycle?.run_id && (
-            <span className="text-[10px] font-mono text-[#89b9ef] bg-[#18212c] border border-[#26313e] px-2 py-0.5 rounded-[4px]">
-              run: {currentCycle.run_id}
-              {currentCycle.brick_idx !== undefined && currentCycle.brick_idx !== null
-                ? ` · brick #${currentCycle.brick_idx}`
-                : ''}
+            <span className="text-[11px] font-mono text-[#89b9ef]/90">
+              {currentCycle.run_id}
+              {currentCycle.brick_idx != null ? ` · #${currentCycle.brick_idx}` : ''}
             </span>
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className={`px-2.5 py-0.5 rounded-[5px] border font-mono text-[10px] font-semibold ${getCellStateStyle(effectiveCellState)}`}>
-            STATE: {effectiveCellState}
-          </div>
-          <div className="bg-[#18212c] px-2.5 py-1 rounded-[5px] border border-[#26313e]/40">
-            <span className="text-[11px] font-medium text-[#b5c0ce] flex items-center space-x-1.5">
-              {activeStage && activeStage !== 'IDLE' && (
-                <span className="w-1.5 h-1.5 rounded-full bg-[#55dbb1] animate-ping" />
-              )}
-              <span>{getStatusText()}</span>
-            </span>
-          </div>
+        <div className="flex items-center gap-2">
+          <motion.span
+            key={effectiveCellState}
+            initial={{ scale: 0.92, opacity: 0.6 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ type: 'spring', stiffness: 360, damping: 24 }}
+            className={`px-2.5 py-0.5 rounded-full border font-mono text-[10.5px] font-semibold flex items-center gap-1.5 ${stateColor}`}
+          >
+            {activeStage !== 'IDLE' && (
+              <span className="w-1.5 h-1.5 rounded-full bg-current animate-ping" />
+            )}
+            <span>FSM: {effectiveCellState}</span>
+          </motion.span>
         </div>
       </div>
 
-      {/* 5-Stage sequence */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3 items-center">
-        {stages.map((st, idx) => {
+      {/* Horizontal Stepper Track */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 relative">
+        {STAGES.map((st, idx) => {
+          const Icon = st.icon;
           const isActive = activeStage === st.id;
           const isPassed = currentIdx > -1 && idx < currentIdx;
 
           return (
-            <div key={st.id} className="flex items-center space-x-2 sm:space-x-3">
+            <div
+              key={st.id}
+              className={`relative rounded-lg px-3 py-2 flex items-center gap-2.5 transition-colors duration-200 border ${
+                isActive
+                  ? 'border-[#55dbb1]/40 text-[#edf2f7]'
+                  : isPassed
+                  ? 'bg-white/[0.03] border-[#55dbb1]/20 text-[#edf2f7]'
+                  : 'bg-white/[0.015] border-white/[0.04] text-[#8e9bae]'
+              }`}
+            >
+              {isActive && (
+                <motion.div
+                  layoutId="pipelineActiveGlow"
+                  transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+                  className="absolute inset-0 rounded-lg bg-gradient-to-r from-[#55dbb1]/15 via-[#55dbb1]/10 to-transparent pointer-events-none"
+                />
+              )}
+
               <div
-                className={`flex-1 flex items-center space-x-2.5 p-2 rounded-[6px] transition-all border ${
+                className={`relative z-10 w-6 h-6 rounded-md flex items-center justify-center shrink-0 transition-colors ${
                   isActive
-                    ? 'bg-[#15352e] border-[#55dbb1] shadow-md shadow-[#55dbb1]/20'
+                    ? 'bg-[#55dbb1] text-[#070a0f] shadow-[0_0_16px_rgba(85,219,177,0.45)]'
                     : isPassed
-                    ? 'bg-[#18212c]/60 border-[#55dbb1]/30'
-                    : 'bg-[#18212c]/30 border-transparent'
+                    ? 'bg-[#15352e] text-[#55dbb1]'
+                    : 'bg-white/[0.05] text-[#8e9bae]'
                 }`}
               >
-                {/* Step number badge */}
-                <div
-                  className={`w-7 h-7 rounded-[5px] flex items-center justify-center text-[10px] font-medium shrink-0 ${
-                    isActive
-                      ? 'bg-[#55dbb1] text-[#0b0f14] font-bold'
-                      : isPassed
-                      ? 'bg-[#15352e] text-[#55dbb1]'
-                      : 'bg-[#18212c] text-[#8e9bae]'
-                  }`}
-                >
-                  {st.step}
-                </div>
-
-                {/* Title & subtitle */}
-                <div className="min-w-0">
-                  <div
-                    className={`text-[13px] font-semibold truncate leading-tight ${
-                      isActive ? 'text-[#55dbb1]' : isPassed ? 'text-[#edf2f7]' : 'text-[#b5c0ce]'
-                    }`}
-                  >
-                    {st.title}
-                  </div>
-                  <div className="text-[10px] text-[#8e9bae] truncate leading-tight mt-0.5">
-                    {st.sub}
-                  </div>
-                </div>
+                <Icon className="w-3.5 h-3.5" />
               </div>
 
-              {/* Arrow connector (hidden on last item) */}
-              {idx < stages.length - 1 && (
-                <ArrowRight className="hidden sm:block w-3.5 h-3.5 text-[#26313e] shrink-0" />
-              )}
+              <div className="relative z-10 min-w-0">
+                <div className="text-[12px] font-semibold leading-tight truncate flex items-center gap-1.5">
+                  <span>{st.title}</span>
+                </div>
+                <div className="text-[10px] font-mono opacity-75 truncate">{st.sub}</div>
+              </div>
             </div>
           );
         })}
       </div>
-    </div>
+    </motion.div>
   );
 }

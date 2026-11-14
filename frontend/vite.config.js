@@ -6,17 +6,18 @@ export default defineConfig({
   base: './',
   plugins: [react()],
   server: {
-    port: 5173,
-    host: true,
+    port: process.env.FIGMA ? Number(process.env.PORT || 5173) : 5173,
+    host: process.env.FIGMA ? (process.env.FIGMA_DEV_SERVER_HOST || '0.0.0.0') : true,
+    strictPort: Boolean(process.env.FIGMA),
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
-        changeOrigin: true
+        changeOrigin: true,
       },
       '/ws': {
         target: 'ws://localhost:8000',
-        ws: true
-      }
-    }
-  }
+        ws: true,
+      },
+    },
+  },
 })
