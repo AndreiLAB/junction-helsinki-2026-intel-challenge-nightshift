@@ -1,12 +1,19 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, Mic, Camera, Send, Volume2, Trash2, Check, RefreshCw } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Sparkles, Mic, Camera, Send, Volume2, Trash2, RefreshCw, Database, Clock } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || (window.location.port === '5173' ? 'http://localhost:8000' : (window.location.hostname === 'localhost' ? 'http://localhost:8000' : ''));
 
-export default function GeminiCopilot({ activeRules, onRuleCreated, onRuleDeleted }) {
+export default function GeminiCopilot({
+  activeRules,
+  policyHistory = [],
+  policyHistoryMeta = { provider: 'FALLBACK', activeThreshold: 0.55 },
+  onRuleCreated,
+  onRuleDeleted,
+}) {
   const [instruction, setInstruction] = useState('');
   const [loading, setLoading] = useState(false);
   const [spokenFeedback, setSpokenFeedback] = useState('');
+  const [panelMode, setPanelMode] = useState('rules'); // 'rules' | 'timeline'
 
   // Media State
   const [webcamActive, setWebcamActive] = useState(false);
@@ -298,81 +305,198 @@ export default function GeminiCopilot({ activeRules, onRuleCreated, onRuleDelete
         {/* Divider */}
         <div className="h-px bg-[#26313e] my-3" />
 
-        {/* Active Sorting Rules List */}
+        {/* Active Sorting Rules / MariaDB Temporal Timeline Toggle */}
         <div>
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center space-x-2">
-              <span className="text-[12px] font-semibold text-[#b5c0ce]">
-                Active sorting rules
-              </span>
-              <span className="bg-[#18212c] text-[#b5c0ce] text-[10px] font-medium px-2 py-0.5 rounded-[4px]">
-                {activeRules.length}
-              </span>
+          <div className="flex items-center justify-between mb-2 gap-2">
+            <div className="flex items-center bg-[#0b0f14] p-0.5 rounded-[5px] border border-[#26313e]">
+              <button
+                type="button"
+                onClick={() => setPanelMode('rules')}
+                className={`px-2.5 py-1 rounded-[4px] text-[11px] font-medium flex items-center space-x-1.5 transition-colors ${
+                  panelMode === 'rules'
+                    ? 'bg-[#18212c] text-[#edf2f7]'
+                    : 'text-[#8e9bae] hover:text-[#edf2f7]'
+                }`}
+              >
+                <span>Active rules</span>
+                <span className="bg-[#0e131a] text-[#b5c0ce] text-[10px] px-1.5 py-0.2 rounded">
+                  {activeRules.length}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPanelMode('timeline')}
+                className={`px-2.5 py-1 rounded-[4px] text-[11px] font-medium flex items-center space-x-1.5 transition-colors ${
+                  panelMode === 'timeline'
+                    ? 'bg-[#15352e] text-[#55dbb1] border border-[#55dbb1]/30'
+                    : 'text-[#8e9bae] hover:text-[#edf2f7]'
+                }`}
+              >
+                <Database className="w-3 h-3" />
+                <span>Policy Timeline</span>
+                <span className="bg-[#0e131a] text-[#b5c0ce] text-[10px] px-1.5 py-0.2 rounded">
+                  {policyHistory.length}
+                </span>
+              </button>
             </div>
-            <span className="text-[10px] font-medium text-[#55dbb1] hover:underline cursor-pointer">
-              View all rules →
-            </span>
-          </div>
 
-          <div className="space-y-2 max-h-[140px] overflow-y-auto pr-1">
-            {activeRules.length === 0 ? (
-              <div className="text-center py-4 text-[#8e9bae] text-[11px]">
-                No custom sorting rules active.
-              </div>
+            {panelMode === 'timeline' ? (
+              <span
+                className={`text-[9px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${
+                  policyHistoryMeta?.provider === 'LIVE'
+                    ? 'text-[#55dbb1] bg-[#15352e]/70 border-[#55dbb1]/30'
+                    : 'text-[#e9bf79] bg-[#352e21]/60 border-[#e9bf79]/25'
+                }`}
+                title="MariaDB WITH SYSTEM VERSIONING · SELECT ... FOR SYSTEM_TIME ALL"
+              >
+                {policyHistoryMeta?.provider === 'LIVE' ? 'MariaDB Temporal LIVE' : 'In-Memory Log'}
+              </span>
             ) : (
-              activeRules.slice(0, 4).map((rule) => {
-                const isReject = rule.action_on_match === 'DEFECTIVE_BOWL';
-                const colorUpper = (rule.target_brick_color || 'ANY').toUpperCase();
-
-                return (
-                  <div
-                    key={rule.rule_id}
-                    className="flex items-center justify-between p-2 rounded-[5px] bg-[#18212c]/40 border border-[#26313e]/60 hover:border-[#26313e] transition-colors group"
-                  >
-                    <div className="flex items-center space-x-2.5 min-w-0">
-                      {/* Color Tag */}
-                      <div className={`px-2 py-0.5 rounded-[4px] text-[10px] font-medium shrink-0 ${
-                        colorUpper === 'YELLOW' ? 'bg-[#352e21] text-[#e9bf79]' :
-                        colorUpper === 'RED' ? 'bg-[#38232c] text-[#f28d95]' :
-                        colorUpper === 'BLUE' ? 'bg-[#18212c] text-[#89b9ef]' :
-                        'bg-[#18212c] text-[#b5c0ce]'
-                      }`}>
-                        {colorUpper}
-                      </div>
-
-                      {/* Rule Defect Pattern */}
-                      <div className="min-w-0">
-                        <div className="text-[11px] font-medium text-[#edf2f7] truncate">
-                          {rule.defect_description || rule.rule_id}
-                        </div>
-                        <div className="text-[10px] text-[#8e9bae] truncate">
-                          Threshold {rule.anomaly_threshold || 0.55}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center space-x-2 shrink-0">
-                      {/* Action tag */}
-                      <div className={`px-2 py-0.5 rounded-[4px] text-[10px] font-medium ${
-                        isReject ? 'bg-[#38232c] text-[#f28d95]' : 'bg-[#352e21] text-[#e9bf79]'
-                      }`}>
-                        {isReject ? 'Reject' : 'Re-grasp'}
-                      </div>
-
-                      {/* Delete */}
-                      <button
-                        onClick={() => onRuleDeleted(rule.rule_id)}
-                        className="text-[#8e9bae] hover:text-[#f28d95] p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Delete rule"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
+              <button
+                type="button"
+                onClick={() => setPanelMode('timeline')}
+                className="text-[10px] font-medium text-[#55dbb1] hover:underline cursor-pointer shrink-0"
+              >
+                MariaDB Temporal →
+              </button>
             )}
           </div>
+
+          {panelMode === 'rules' ? (
+            <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+              {activeRules.length === 0 ? (
+                <div className="text-center py-4 text-[#8e9bae] text-[11px]">
+                  No custom sorting rules active.
+                </div>
+              ) : (
+                activeRules.slice(0, 6).map((rule) => {
+                  const isReject = rule.action_on_match === 'DEFECTIVE_BOWL';
+                  const colorUpper = (rule.target_brick_color || 'ANY').toUpperCase();
+
+                  return (
+                    <div
+                      key={rule.rule_id}
+                      className="flex items-center justify-between p-2 rounded-[5px] bg-[#18212c]/40 border border-[#26313e]/60 hover:border-[#26313e] transition-colors group"
+                    >
+                      <div className="flex items-center space-x-2.5 min-w-0">
+                        <div className={`px-2 py-0.5 rounded-[4px] text-[10px] font-medium shrink-0 ${
+                          colorUpper === 'YELLOW' ? 'bg-[#352e21] text-[#e9bf79]' :
+                          colorUpper === 'RED' ? 'bg-[#38232c] text-[#f28d95]' :
+                          colorUpper === 'BLUE' ? 'bg-[#18212c] text-[#89b9ef]' :
+                          'bg-[#18212c] text-[#b5c0ce]'
+                        }`}>
+                          {colorUpper}
+                        </div>
+
+                        <div className="min-w-0">
+                          <div className="text-[11px] font-medium text-[#edf2f7] truncate">
+                            {rule.defect_description || rule.rule_id}
+                          </div>
+                          <div className="text-[10px] text-[#8e9bae] truncate tabular-nums">
+                            Threshold {rule.anomaly_threshold || 0.55}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2 shrink-0">
+                        <div className={`px-2 py-0.5 rounded-[4px] text-[10px] font-medium ${
+                          isReject ? 'bg-[#38232c] text-[#f28d95]' : 'bg-[#352e21] text-[#e9bf79]'
+                        }`}>
+                          {isReject ? 'Reject' : 'Re-grasp'}
+                        </div>
+
+                        <button
+                          onClick={() => onRuleDeleted(rule.rule_id)}
+                          className="text-[#8e9bae] hover:text-[#f28d95] p-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Delete rule"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1">
+              <div className="px-2 py-1 rounded bg-[#0b0f14] border border-[#26313e]/80 flex items-center justify-between text-[10px] text-[#8e9bae] font-mono">
+                <span>FOR SYSTEM_TIME ALL</span>
+                <span className="text-[#55dbb1] tabular-nums">
+                  Active Threshold: {Number(policyHistoryMeta?.activeThreshold ?? 0.55).toFixed(2)}
+                </span>
+              </div>
+
+              {policyHistory.length === 0 ? (
+                <div className="text-center py-4 text-[#8e9bae] text-[11px]">
+                  No temporal policy versions recorded yet.
+                </div>
+              ) : (
+                policyHistory.map((item, idx) => {
+                  const isCurrent = Boolean(item.is_current);
+                  const src = (item.source || '').toLowerCase();
+                  const sourceLabel = src.includes('gemini')
+                    ? 'Gemini 3.8'
+                    : src.includes('nemotron') || src.includes('verda')
+                    ? 'Nemotron B300'
+                    : src.includes('operator')
+                    ? 'Operator UI'
+                    : 'Bootstrap';
+                  const validFromShort = item.valid_from ? item.valid_from.split(' ')[1] || item.valid_from : '—';
+                  const validToShort = item.valid_to ? item.valid_to.split(' ')[1] || item.valid_to : 'NOW';
+
+                  return (
+                    <div
+                      key={`${item.policy_id}-${item.valid_from || idx}`}
+                      className={`p-2 rounded-[5px] border transition-colors ${
+                        isCurrent
+                          ? 'bg-[#18212c]/60 border-[#26313e]'
+                          : 'bg-[#0e131a]/80 border-[#26313e]/40 opacity-80'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center space-x-1.5 min-w-0">
+                          <span className={`px-1.5 py-0.2 rounded text-[9px] font-semibold uppercase tracking-wide shrink-0 ${
+                            sourceLabel === 'Gemini 3.8'
+                              ? 'bg-[#15352e] text-[#55dbb1]'
+                              : sourceLabel === 'Nemotron B300'
+                              ? 'bg-[#1b2a3d] text-[#89b9ef]'
+                              : 'bg-[#18212c] text-[#b5c0ce]'
+                          }`}>
+                            {sourceLabel}
+                          </span>
+                          <span className="text-[10px] font-mono text-[#edf2f7] truncate">
+                            {item.event_type}
+                          </span>
+                        </div>
+                        <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded shrink-0 ${
+                          isCurrent
+                            ? 'text-[#55dbb1] bg-[#15352e]/60'
+                            : 'text-[#8e9bae] bg-[#18212c]'
+                        }`}>
+                          {isCurrent ? 'CURRENT' : 'HISTORY'}
+                        </span>
+                      </div>
+
+                      <div className="mt-1 text-[11px] text-[#edf2f7] truncate">
+                        {item.defect_description || item.policy_id}
+                      </div>
+
+                      <div className="mt-1 flex items-center justify-between text-[9px] text-[#8e9bae] font-mono tabular-nums">
+                        <span className="flex items-center space-x-1 truncate">
+                          <Clock className="w-2.5 h-2.5 shrink-0 text-[#8e9bae]" />
+                          <span>{validFromShort} → {validToShort}</span>
+                        </span>
+                        <span className="text-[#b5c0ce] shrink-0 ml-2">
+                          thr={Number(item.anomaly_threshold ?? 0.55).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

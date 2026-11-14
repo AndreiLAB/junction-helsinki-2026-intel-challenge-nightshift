@@ -31,8 +31,27 @@ export default function App() {
   const [selectedCycle, setSelectedCycle] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
   const [cloudProviders, setCloudProviders] = useState(null);
+  const [policyHistory, setPolicyHistory] = useState([]);
+  const [policyHistoryMeta, setPolicyHistoryMeta] = useState({ provider: 'FALLBACK', activeThreshold: 0.55 });
 
   const wsRef = useRef(null);
+
+  // MariaDB WITH SYSTEM VERSIONING temporal policy history (/api/policies/history)
+  const fetchPolicyHistory = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/policies/history?limit=30`);
+      if (res.ok) {
+        const data = await res.json();
+        setPolicyHistory(Array.isArray(data.history) ? data.history : []);
+        setPolicyHistoryMeta({
+          provider: data.provider || 'FALLBACK',
+          activeThreshold: data.active_anomaly_threshold ?? 0.55,
+        });
+      }
+    } catch (err) {
+      console.warn("Could not fetch /api/policies/history:", err);
+    }
+  }, []);
 
   // Cloud stack health check (/api/health)
   const fetchHealth = useCallback(async () => {
@@ -49,9 +68,10 @@ export default function App() {
 
   useEffect(() => {
     fetchHealth();
+    fetchPolicyHistory();
     const intervalId = setInterval(fetchHealth, 10000);
     return () => clearInterval(intervalId);
-  }, [fetchHealth]);
+  }, [fetchHealth, fetchPolicyHistory]);
 
   // Initial state fetch from REST API
   useEffect(() => {
@@ -107,6 +127,7 @@ export default function App() {
             setCurrentCycle(prev => prev?.cycle_id === msg.cycle.cycle_id ? msg.cycle : prev);
             setSelectedCycle(prev => prev?.cycle_id === msg.cycle.cycle_id ? msg.cycle : prev);
             fetchHealth();
+            fetchPolicyHistory();
           } else if (msg.type === 'INITIAL_STATE') {
             if (msg.active_rules) setActiveRules(msg.active_rules);
             if (msg.recent_cycles) {
@@ -118,8 +139,10 @@ export default function App() {
             if (msg.simulation_running !== undefined) setSimulationRunning(msg.simulation_running);
           } else if (msg.type === 'RULE_CREATED') {
             if (msg.active_rules) setActiveRules(msg.active_rules);
+            fetchPolicyHistory();
           } else if (msg.type === 'RULE_DELETED') {
             if (msg.active_rules) setActiveRules(msg.active_rules);
+            fetchPolicyHistory();
           } else if (msg.type === 'SIMULATION_STATUS') {
             setSimulationRunning(msg.simulation_running);
           }
@@ -146,7 +169,7 @@ export default function App() {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [fetchHealth]);
+  }, [fetchHealth, fetchPolicyHistory]);
 
   // API Callbacks
   const handleTriggerCycle = async (outcome) => {
@@ -179,6 +202,7 @@ export default function App() {
 
   const handleRuleCreated = (newRule) => {
     setActiveRules(prev => [newRule, ...prev.filter(r => r.rule_id !== newRule.rule_id)]);
+    fetchPolicyHistory();
   };
 
   const handleRuleDeleted = async (ruleId) => {
@@ -186,6 +210,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/copilot/rule/${ruleId}`, { method: 'DELETE' });
       if (res.ok) {
         setActiveRules(prev => prev.filter(r => r.rule_id !== ruleId));
+        fetchPolicyHistory();
       }
     } catch (err) {
       console.error("Failed to delete rule:", err);
@@ -333,6 +358,8 @@ export default function App() {
                 <div className={activeTab === 'rules' ? 'lg:col-span-12' : 'lg:col-span-5 xl:col-span-5'}>
                   <GeminiCopilot
                     activeRules={activeRules}
+                    policyHistory={policyHistory}
+                    policyHistoryMeta={policyHistoryMeta}
                     onRuleCreated={handleRuleCreated}
                     onRuleDeleted={handleRuleDeleted}
                   />
