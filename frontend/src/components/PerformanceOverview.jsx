@@ -87,7 +87,7 @@ export default function PerformanceOverview({ cycles = [] }) {
         delay={0}
       />
       <StatCard
-        label="Good Bowl (< t_low)"
+        label="Green GOOD Bowl (< 0.45)"
         value={accepted}
         subtext={`${acceptancePct}% pass rate`}
         accent="good"
@@ -95,7 +95,7 @@ export default function PerformanceOverview({ cycles = [] }) {
         barPct={acceptancePct}
       />
       <StatCard
-        label="Defect Bowl (> t_high)"
+        label="Pink DEFECT Bowl (> 0.60)"
         value={defective}
         subtext="Audited · B300"
         accent="defect"
@@ -103,9 +103,9 @@ export default function PerformanceOverview({ cycles = [] }) {
         barPct={total > 0 ? Math.round((defective / total) * 100) : 0}
       />
       <StatCard
-        label="Multi-View Recovery"
+        label="Put-Back Re-Grasp"
         value={regrasps}
-        subtext="t_low – t_high band"
+        subtext="0.45 – 0.60 band"
         accent="warn"
         delay={0.15}
       />

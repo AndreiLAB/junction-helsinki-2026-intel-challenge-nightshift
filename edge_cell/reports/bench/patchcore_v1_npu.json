@@ -1,0 +1,13 @@
+{
+ "model": "patchcore_v1",
+ "device": "NPU",
+ "precision": "NPU default (FP16 compute)",
+ "latency_ms_p50": 181,
+ "latency_ms_p95": 183,
+ "fps": 5.5,
+ "compile_s": 9.2,
+ "size_mb": 148,
+ "quality_metric": "image AUROC (held-out by episode)",
+ "quality": 0.949,
+ "evidence": "REAL latency on 12 frames; scores match GPU within 0.01; batch 2 duplicated input"
+}

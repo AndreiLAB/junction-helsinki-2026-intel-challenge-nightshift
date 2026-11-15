@@ -50,7 +50,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('cockpit');
   const [activeStage, setActiveStage] = useState('OPTIMIZE');
   const [cellState, setCellState] = useState('CONFIRM');
-  const [policyBounds, setPolicyBounds] = useState({ t_low: 0.35, t_high: 0.60, anomaly_threshold: 0.54 });
+  const [policyBounds, setPolicyBounds] = useState({ t_low: 0.45, t_high: 0.60, anomaly_threshold: 0.55 });
   const [activeRules, setActiveRules] = useState(PREVIEW_RULES);
   const [recentCycles, setRecentCycles] = useState(PREVIEW_CYCLES);
   const [benchmarks, setBenchmarks] = useState(PREVIEW_BENCHMARKS);
@@ -235,11 +235,11 @@ export default function App() {
       const verdict = chosen === 'DEFECTIVE_BOWL' ? 'DEFECT' : chosen === 'REGRASP_TRIGGERED' ? 'UNCERTAIN' : 'GOOD';
       const score =
         verdict === 'DEFECT'
-          ? +(0.68 + Math.random() * 0.25).toFixed(3)
+          ? [0.76, 0.81, 0.85][Math.floor(Math.random() * 3)]
           : verdict === 'UNCERTAIN'
-          ? +(0.38 + Math.random() * 0.18).toFixed(3)
-          : +(0.08 + Math.random() * 0.21).toFixed(3);
-      const color = verdict === 'DEFECT' ? 'yellow' : verdict === 'UNCERTAIN' ? 'blue' : ['green', 'red'][Math.floor(Math.random() * 2)];
+          ? +(0.47 + Math.random() * 0.11).toFixed(2)
+          : [0.05, 0.12, 0.32, 0.33][Math.floor(Math.random() * 4)];
+      const color = verdict === 'DEFECT' ? 'pink' : verdict === 'UNCERTAIN' ? 'blue' : ['green', 'yellow'][Math.floor(Math.random() * 2)];
       const nextBrickIdx = (recentCycles[0]?.brick_idx || 4) + 1;
 
       setActiveStage('DETECT');
@@ -261,9 +261,9 @@ export default function App() {
         color,
         defect_label:
           verdict === 'DEFECT'
-            ? 'Cracked Top Stud / Side Mark'
+            ? 'White Tape + Blue X Defect Marker'
             : verdict === 'UNCERTAIN'
-            ? 'Specular Highlight Glare'
+            ? 'Uncertain Band [0.45, 0.60] — Put-Back Re-Grasp'
             : 'None (Pristine)',
         verdict,
         score,
@@ -272,7 +272,7 @@ export default function App() {
         t_high: policyBounds.t_high,
         views:
           verdict === 'UNCERTAIN'
-            ? [{ view: 'inspect', score: +(score - 0.05).toFixed(2) }, { view: 'inspect_view2', score }]
+            ? [{ view: 'inspect', score: +(score - 0.03).toFixed(2) }, { view: 'inspect_regrasp', score }]
             : [{ view: 'inspect', score }],
         action: chosen,
         instruction:
@@ -282,19 +282,19 @@ export default function App() {
             ? 'Pick up a brick and hold it in front of the inspection camera.'
             : 'Put the brick in the good bowl.',
         cell_state: verdict === 'UNCERTAIN' ? 'REGRASP' : 'CONFIRM',
-        model: 'patchcore_256',
-        precision: 'INT8',
+        model: 'patchcore_v1',
+        precision: 'FP16',
         device: 'NPU',
-        latency_ms: 9.3,
-        cycle_s: +(3.5 + Math.random() * 2.2).toFixed(2),
-        evidence: 'REPLAY',
+        latency_ms: 181.0,
+        cycle_s: +(29.8 + Math.random() * 4.0).toFixed(1),
+        evidence: 'REAL',
         nemotron_provider: 'verda_b300',
         nemotron_reasoning:
           verdict === 'DEFECT'
-            ? 'High anomaly localization on upper brick perimeter; safely diverted to defective bowl.'
+            ? 'Inspect camera + PatchCore v1 (AUROC 0.949, F1 0.929) localized white tape + blue X defect; SmolVLA v1 placed brick in Pink DEFECT bowl.'
             : verdict === 'UNCERTAIN'
-            ? 'Score sits inside t_low..t_high deadband; wrist multi-view re-orientation triggered.'
-            : 'Uniform stud topology verified below t_low.',
+            ? 'Score sits inside [0.45, 0.60] deadband; put-back into Blue Source Bowl and re-pick via ACT v2 (12ms GPU).'
+            : 'Clean stud topology verified on NPU below t_low 0.45; SmolVLA v1 placed brick in Green GOOD bowl.',
       };
       setCurrentCycle(newCycle);
       setRecentCycles((prev) => [newCycle, ...prev].slice(0, 40));

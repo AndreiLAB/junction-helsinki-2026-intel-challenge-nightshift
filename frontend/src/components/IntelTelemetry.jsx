@@ -9,16 +9,17 @@ export default function IntelTelemetry({
   expanded = false,
   onOpenBenchTab,
 }) {
-  const npu = metrics?.npu || { latency_ms: 9.3, utilization_pct: 74, power_watts: 4.8 };
-  const igpu = metrics?.igpu || { latency_ms: 24.0, utilization_pct: 68, throughput_fps: 41.7 };
-  const cpu = metrics?.cpu || { latency_ms: 1.9, utilization_pct: 28, jitter_us: 12.4 };
+  const npu = metrics?.npu || { latency_ms: 181.0, utilization_pct: 64, power_watts: 4.2 };
+  const igpu = metrics?.igpu || { latency_ms: 104.0, pick_latency_ms: 12.0, utilization_pct: 72, throughput_fps: 41.7 };
+  const cpu = metrics?.cpu || { latency_ms: 2.0, utilization_pct: 24, jitter_us: 11.8 };
 
-  const npuMs = Number(currentCycle?.latency_ms ?? npu.latency_ms ?? 9.3);
-  const igpuMs = Number(igpu.latency_ms ?? 24.0);
-  const cpuMs = Number(cpu.latency_ms ?? 1.9);
+  const npuMs = Number(currentCycle?.latency_ms ?? npu.latency_ms ?? 181.0);
+  const igpuMs = Number(igpu.latency_ms ?? 104.0);
+  const pickMs = Number(igpu.pick_latency_ms ?? 12.0);
+  const cpuMs = Number(cpu.latency_ms ?? 2.0);
   const totalMs = npuMs + igpuMs + cpuMs;
 
-  const maxBenchMs = Math.max(40, ...benchmarks.map((b) => Number(b.latency_ms_p50 || 0)));
+  const maxBenchMs = Math.max(250, ...benchmarks.map((b) => Math.min(300, Number(b.latency_ms_p50 || 0))));
 
   if (expanded) {
     return (
@@ -35,20 +36,20 @@ export default function IntelTelemetry({
             </div>
             <div>
               <h2 className="text-[16px] font-semibold text-[#edf2f7]">
-                OpenVINO Device &amp; Precision Benchmarks
+                OpenVINO 2026.4 Device &amp; Precision Benchmarks
               </h2>
               <p className="text-[12px] text-[#8e9bae]">
-                Core Ultra Series 3 · Auto-synced from ~/duplo-cell/reports/bench/*.json
+                Intel Core Ultra X9 388H · Synced from edge_cell/reports/bench/*.json
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-3 font-mono text-[11px] text-[#8e9bae]">
-            <span>NPU {npuMs.toFixed(1)}ms</span>
+            <span>NPU PatchCore {npuMs.toFixed(0)}ms</span>
             <span>·</span>
-            <span>iGPU {igpuMs.toFixed(1)}ms</span>
+            <span>GPU ACT {pickMs.toFixed(0)}ms / SmolVLA {igpuMs.toFixed(0)}ms (22× vs CPU)</span>
             <span>·</span>
-            <span>CPU {cpuMs.toFixed(1)}ms</span>
+            <span>CPU 30Hz ({cpuMs.toFixed(1)}ms)</span>
           </div>
         </div>
 
@@ -151,9 +152,9 @@ export default function IntelTelemetry({
 
   // Compact Cockpit Card
   const lanes = [
-    { label: 'NPU', sub: `${currentCycle?.model || 'patchcore_256'} · ${currentCycle?.precision || 'INT8'}`, ms: npuMs, color: '#55dbb1' },
-    { label: 'iGPU', sub: `SmolVLA · FP16 (${igpu.throughput_fps?.toFixed(0) || 42} fps)`, ms: igpuMs, color: '#89b9ef' },
-    { label: 'CPU', sub: 'FSM · 30 Hz IK loop', ms: cpuMs, color: '#c4a7ea' },
+    { label: 'NPU', sub: `${currentCycle?.model || 'patchcore_v1'} · ${currentCycle?.precision || 'FP16'} (148MB, AUROC 0.949)`, ms: npuMs, color: '#55dbb1' },
+    { label: 'iGPU', sub: `ACT v2 ${pickMs.toFixed(0)}ms + SmolVLA v1 ${igpuMs.toFixed(0)}ms (22× vs CPU)`, ms: igpuMs, color: '#89b9ef' },
+    { label: 'CPU', sub: '30 Hz FSM + ActionFilter + iceoryx2', ms: cpuMs, color: '#c4a7ea' },
   ];
 
   return (

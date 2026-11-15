@@ -1,54 +1,38 @@
 # Project Overview: Autonomous Physical AI Inspection Cell (Junction 2026)
 
-## 1. Event & Targeted Challenges
-
-* **Event:** Junction 2026 (Helsinki/Espoo, Finland) — 48-hour hackathon.
-* **Main Track — Intel Physical AI Challenge (100 pts):** Build an end-to-end closed-loop robotic defect inspection and sorting cell (`PERCEIVE -> DETECT -> REASON -> ACT -> OPTIMIZE`) using **Intel Physical AI Studio**, **Anomalib v2.7.0**, and **OpenVINO** on an **Intel Core Ultra X9 Series 3 (388H)** laptop.
-  * *Scoring breakdown:* End-to-End Closed-Loop Solution (25 pts), Anomalib Defect Detection (20 pts), VLA & Physical AI Studio Integration (20 pts), OpenVINO & Core Ultra Series 3 Optimization (20 pts), Robotic Execution & Reliability including uncertainty recovery (10 pts), Innovation & Live Demo (5 pts).
-* **Side Tracks Stacked on Top (Asynchronous Cloud Layer — Owned Here):**
-  * **NVIDIA Nemotron (2× RTX 5080 prize):** `nemotron-3.5-super-vl` via Verda B300 endpoint (`https://containers.datacrunch.io/nemotron-3-5-super-vl-b300/v1`) acting as an asynchronous visual root-cause and threshold-tuning agent.
-  * **Google Gemini API:** `gemini-3.8-flash` multimodal Floor Copilot (webcam + voice + structured JSON output) for hands-free operator rule commissioning and live spoken explanations.
-  * **Best Use of Modal:** Official Modal GPU cloud training for VLA/Anomalib plus Modal serverless FastAPI webhooks and Sandboxes (`MODAL_WEBHOOK_URL`).
-  * **MariaDB Challenge:** MariaDB 11.7+ storing cycle latency telemetry alongside native `VECTOR(512)` embeddings (`VEC_DISTANCE_COSINE`).
-  * **Cloudinary Tech Challenge:** Programmatic uploads, chained `l_overlay` heatmap compositing, badges, and defect highlight trails (survey at `https://cld.media/hackathon-survey`).
-  * **Supporting Assets:** **Qualia** (SO-ARM101 episode curation before training) and **IronShard** (>100 MiB model/dataset storage).
-
----
-
-## 2. System Architecture & Station Hardware
-
 ![NightShift System Architecture — A closed loop. Not just a prediction.](docs/images/architecture.png)
 
-* **Golden Architectural Rule:** The physical robot control loop stays **100% local** on the Intel Core Ultra X9 388H laptop via OpenVINO (<36 ms target loop). All cloud AI models (Gemini, Nemotron, Modal, MariaDB, Cloudinary) run **asynchronously off the critical path** so network latency never slows or breaks robot execution.
-* **Physical Station Hardware (On Desk):**
-  * **Laptop:** HP OmniBook Ultra (C2NM8AV) or Dell XPS 16 (DA16260) with **Intel Core Ultra X9 Series 3 (388H)**, 64 GB RAM, Ubuntu v26.04, pre-installed NPU/iGPU drivers (up to 180 platform TOPS).
-  * **NPU (50 TOPS):** `Anomalib v2.7.0` (`EfficientAd`/`Padim`/`PatchCore`) defect scoring + heatmap.
-  * **iGPU (12 Xe3 Cores):** Physical AI Studio VLA (`ACT` baseline + `SmolVLA`) with OpenVINO FP16 and async action chunking.
-  * **CPU:** Deterministic control loop, safety action clamping, velocity limits, ROI preprocessing, and non-blocking event emission.
-  * **Robot:** 1× **LeRobot SO-ARM101 Follower Arm** ("hand") + 1× **Leader Arm** ("controller").
-  * **Cameras (2× Shared Rig):** `CAM-01` Top-View Workspace Camera (Duplo plate & bowls) + `CAM-02` Close-Up Inspection Camera (with plain paper backdrop for clean Anomalib ROI).
-  * **Objects:** Plates with Lego Duplo blocks (normal vs. marker-defective) + two taped bowls labeled `GOOD` and `DEFECTIVE` (plus a sealed `EXAM` bag of 5 good + 5 defective bricks reserved for final testing).
+## 1. Unified Product Architecture ("Cleanly Separated Modules, One Unified Product")
+
+Our repository is organized as **two cleanly separated layers** connected by a single **non-blocking file & HTTP telemetry contract** (`0 ms` added latency to the robot control loop):
+
+1. **Layer 1 — Physical Edge Cell ([`edge_cell/`](edge_cell/)):**
+   - **100% standalone** physical robot and edge inference package (`cell/`, `common/`, `configs/`, `inspection/`, `models/`, `reports/`, `tests/`).
+   - Runs at **30 Hz** on the **Intel Core Ultra X9 388H** laptop (`OpenVINO 2026.4`) driving the **LeRobot SO-ARM101** follower arm across 3 cameras (`top`, `inspect`, `wrist` at `640×480@30fps` via `iceoryx2`).
+   - **Heterogeneous OpenVINO 2026.4 Dispatch:**
+     - **Pick (`ACT v2` on Intel Arc iGPU):** `12 ms` median per `100×6` chunk (`exec_horizon=30`, re-plans every 1 s, trained on 154 demos).
+     - **Inspect (`PatchCore v1` on Intel AI Boost NPU):** `181 ms` p50 (`183 ms` p95, `148 MB`, `AUROC = 0.949`, `F1 = 0.929`; `24 ms` on iGPU, `245 ms` on CPU). Keeping anomaly detection on the NPU leaves the iGPU 100% free for 30 Hz arm policies.
+     - **Place (`SmolVLA v1` 450M on Intel Arc iGPU):** `104 ms` median per `50×6` chunk on GPU vs `2,325 ms` on CPU (**`22×` GPU speedup**), language-conditioned on the verdict (*"Put the brick in the good bowl."* vs *"Put the brick in the defective bowl."*).
+     - **Control & Safety (`CPU`):** 30 Hz state machine + `ActionFilter` (EMA $\alpha=0.65$, $\le 5^\circ/\text{tick}$ rate clamp, workspace floor guard).
+   - **Physical Sorting Setup:** **Blue Source Bowl** (input plate) $\rightarrow$ **Green GOOD Bowl** (`score < 0.45`) or **Pink DEFECT Bowl** (`score > 0.60`, white tape + blue X defects), with put-back re-grasp recovery (`[0.45, 0.60]`, `max_regrasps=1`).
+
+2. **Layer 2 — Cloud, AI & Data Hub ([`backend/`](backend/) + [`frontend/`](frontend/)):**
+   - Coupled **only** through `backend/duplo_cell_bridge.py` watching `edge_cell/runs/<run_id>/events.jsonl`, `edge_cell/runs/<run_id>/heatmaps/*.png`, `edge_cell/reports/bench/*.json`, and `edge_cell/configs/station.yaml`.
+   - **All 5 Cloud & Side-Track Integrations (`5/5 LIVE` in `GET /api/health`):**
+     - **Google Gemini (`gemini-3.8-flash`):** Hands-free multimodal Floor Copilot (`backend/gemini_copilot.py`).
+     - **NVIDIA Nemotron (`nemotron-3.5-super-vl` on Verda B300):** Asynchronous visual root-cause reasoning and dynamic threshold calibration (`backend/nemotron_worker.py`).
+     - **Cloudinary (`l_overlay`):** Programmatic inspection crop & PatchCore heatmap upload + overlay compositing (`backend/cloudinary_media.py`).
+     - **MariaDB 11.8 LTS (`VECTOR(512)` + `WITH SYSTEM VERSIONING`):** Native `VEC_DISTANCE_COSINE` 512-dim defect twin search + `FOR SYSTEM_TIME ALL` temporal policy auditing (`backend/mariadb_store.py`).
+     - **Modal Serverless (`modal_webhook.py`):** `@modal.fastapi_endpoint` archiving escalated defect manifests to `modal.Volume` (`junction-defect-archive`) and `modal.Dict` (`junction-escalation-state`).
 
 ---
 
-## 3. Team Roles & Unified Cloud Hub Ownership
+## 2. Real Robot Verification (`run 20261114-195437` — 4/4 Sorted on Video)
 
-* **At the Physical Station (`~/duplo-cell` on Ubuntu):** 3 teammates run the physical robot station, Physical AI Studio recordings, `~/duplo-cell` Claude Code agents (`Lead`, `Policy`, `Inspection`, `Speed and demo`, `Robot`), and handle all station timekeeping, checkpoints, and screenshots.
-* **In This Workspace (`f:/JunctionH 2026`) — Unified Cloud, AI & Data Hub Lead (Merged Member 3 + Member 4):**
-  * **Zero timekeeping or physical table duties.** 100% focused on the unified asynchronous Cloud & Side-Track Backend + Mission Control Hub:
-    1. **Google Gemini (`gemini-3.8-flash`):** Live multimodal Floor Copilot (`backend/gemini_copilot.py`).
-    2. **Cloudinary (`l_overlay`):** Live inspection crop & heatmap upload + overlay compositing (`backend/cloudinary_media.py`).
-    3. **NVIDIA Nemotron (`nemotron-3.5-super-vl` via Verda B300):** Async visual root-cause analysis and dynamic threshold tuning (`backend/nemotron_worker.py` -> `PATCH /api/cycles/{brick_uuid}/nemotron`).
-    4. **MariaDB 11.7+ (`VECTOR(512)`):** Cycle telemetry persistence + `VEC_DISTANCE_COSINE` nearest-neighbor defect similarity search (`backend/mariadb_store.py`).
-    5. **Modal Cloud Webhook (`MODAL_WEBHOOK_URL`):** Serverless escalation/audit webhook (`backend/modal_webhook.py`).
-    6. **Zero-Dependency Station Bridge:** `backend/duplo_cell_bridge.py` & `backend/duplo_bridge_example.py` for non-blocking `POST /api/cycles` and `GET /api/policy` from `~/duplo-cell`.
+In the recorded autonomous run (`run 20261114-195437`, `REAL`), the cell sorted **4 of 4 bricks** one after another with **zero human touches**:
+- **Brick #1:** Pick `18.0 s` $\rightarrow$ NPU PatchCore score **`0.32`** (`GOOD`) $\rightarrow$ Green bowl (`3.9 s` place, `49.9 s` incl. initial home).
+- **Brick #2:** Pick `12.7 s` $\rightarrow$ NPU PatchCore score **`0.81`** (`DEFECT`) $\rightarrow$ Pink bowl (`4.5 s` place, **`29.8 s`** total).
+- **Brick #3:** Pick `18.0 s` $\rightarrow$ NPU PatchCore score **`0.05`** (`GOOD`) $\rightarrow$ Green bowl (`4.7 s` place, **`33.8 s`** total).
+- **Brick #4:** NPU PatchCore score **`0.76`** (`DEFECT`) $\rightarrow$ Pink bowl (`4.4 s` place).
 
----
-
-## 4. Operating Rules for Antigravity (Dev One)
-
-1. **Stay synced with [Redefine Dev One Role](conversation://f34354b2-6fed-417f-a2d2-788428256d40):** Check its transcript (`C:\Users\gagna\.gemini\antigravity\brain\f34354b2-6fed-417f-a2d2-788428256d40\.system_generated\logs\transcript.jsonl`) for any updated architectural or role instructions.
-2. **Focus strictly on the Unified Cloud & AI Hub (M3 + M4):** Keep `backend/` and `frontend/` cleanly modular; preserve `POST /api/cycles`, `GET /api/policy`, and `PATCH /api/cycles/{brick_uuid}/nemotron` contracts. Do not add timekeeping clutter or touch local robot control code.
-3. **Offline resilience:** Keep graceful fallbacks active in every cloud module (Gemini, Cloudinary, Nemotron Verda B300, MariaDB Vector, Modal) so the system works both with live credentials and offline.
-4. **Never commit secrets:** Keep `backend/.env` and `.venv/` excluded via `.gitignore`.
-5. **Verify before pushing:** Run `npm --prefix frontend run build` and backend integration tests before committing to `main`.
+Full trial logs are preserved in [`edge_cell/reports/trials.md`](edge_cell/reports/trials.md) and hardware benchmark JSONs in [`edge_cell/reports/bench/`](edge_cell/reports/bench/).

@@ -71,6 +71,8 @@ export default function NemotronAuditFeed({
                 const brickHex =
                   cyc.color === 'yellow'
                     ? '#f59e0b'
+                    : cyc.color === 'pink'
+                    ? '#ec4899'
                     : cyc.color === 'red'
                     ? '#f43f5e'
                     : cyc.color === 'blue'

@@ -1,0 +1,13 @@
+{
+ "model": "patchcore_v1",
+ "device": "CPU",
+ "precision": "FP32",
+ "latency_ms_p50": 245,
+ "latency_ms_p95": 247,
+ "fps": 4.1,
+ "compile_s": 0.4,
+ "size_mb": 148,
+ "quality_metric": "image AUROC (held-out by episode)",
+ "quality": 0.949,
+ "evidence": "REAL latency; quality REPLAY"
+}

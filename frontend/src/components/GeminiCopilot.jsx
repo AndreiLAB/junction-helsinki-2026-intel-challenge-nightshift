@@ -35,8 +35,8 @@ export default function GeminiCopilot({
   const timerRef = useRef(null);
 
   const quickPrompts = [
-    'Reject yellow bricks with black side stripes',
-    'Re-grasp blue bricks',
+    'Reject bricks with white tape and blue X into pink defect bowl',
+    'Put back and re-grasp bricks scoring in 0.45 to 0.60 band',
   ];
 
   const toggleWebcam = async () => {

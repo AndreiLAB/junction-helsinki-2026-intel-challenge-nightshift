@@ -1,0 +1,13 @@
+{
+ "model": "patchcore_v1",
+ "device": "GPU",
+ "precision": "FP32",
+ "latency_ms_p50": 24,
+ "latency_ms_p95": 26,
+ "fps": 41.7,
+ "compile_s": 1.2,
+ "size_mb": 148,
+ "quality_metric": "image AUROC (held-out by episode)",
+ "quality": 0.949,
+ "evidence": "REAL latency on 10 test_good frames; quality REPLAY; batch 2 duplicated input"
+}

@@ -11,8 +11,8 @@ const VIEW_MODES = [
 export default function DualCameraFeed({ currentCycle, cellState = 'HOME', policyBounds, activeStage = 'IDLE' }) {
   const [viewMode, setViewMode] = useState('overlay');
 
-  const score = Number(currentCycle?.score ?? currentCycle?.anomaly_score ?? 0.14);
-  const tLow = Number(currentCycle?.t_low ?? policyBounds?.t_low ?? 0.35);
+  const score = Number(currentCycle?.score ?? currentCycle?.anomaly_score ?? 0.12);
+  const tLow = Number(currentCycle?.t_low ?? policyBounds?.t_low ?? 0.45);
   const tHigh = Number(currentCycle?.t_high ?? policyBounds?.t_high ?? 0.60);
 
   const verdict = (
@@ -58,6 +58,8 @@ export default function DualCameraFeed({ currentCycle, cellState = 'HOME', polic
   const brickHex =
     brickColor === 'yellow'
       ? '#f59e0b'
+      : brickColor === 'pink'
+      ? '#ec4899'
       : brickColor === 'red'
       ? '#f43f5e'
       : brickColor === 'blue'
@@ -133,7 +135,7 @@ export default function DualCameraFeed({ currentCycle, cellState = 'HOME', polic
                 <CheckCircle2 className="w-3.5 h-3.5" />
               )}
               <span>
-                {verdict} → {isDefective ? 'Defect Bowl' : isRegrasp ? 'Multi-View / Re-grasp' : 'Good Bowl'}
+                {verdict} → {isDefective ? 'Pink DEFECT Bowl' : isRegrasp ? 'Blue Source (Re-grasp)' : 'Green GOOD Bowl'}
               </span>
             </motion.div>
           </AnimatePresence>
@@ -152,9 +154,12 @@ export default function DualCameraFeed({ currentCycle, cellState = 'HOME', polic
               <img src={currentCycle.top_url} alt="Overhead workspace" className="w-full h-full object-cover" />
             ) : (
               <svg viewBox="0 0 300 185" className="w-full h-full">
-                {/* Plate */}
-                <rect x="108" y="96" width="84" height="58" rx="6" fill="#0d1522" stroke="#1e293b" strokeWidth="1" />
-                {/* Good Bowl */}
+                {/* Blue Source Bowl */}
+                <rect x="104" y="96" width="92" height="58" rx="8" fill="#0d1b30" stroke="#3b82f6" strokeOpacity="0.45" strokeWidth="1.2" />
+                <text x="150" y="146" textAnchor="middle" fill="#60a5fa" fontSize="7" fontFamily="monospace" fontWeight="600">
+                  BLUE SOURCE BOWL
+                </text>
+                {/* Green GOOD Bowl */}
                 <motion.circle
                   cx="55"
                   cy="50"
@@ -166,10 +171,10 @@ export default function DualCameraFeed({ currentCycle, cellState = 'HOME', polic
                   transition={{ repeat: Infinity, duration: 2.2 }}
                 />
                 <text x="55" y="54" textAnchor="middle" fill="#55dbb1" fontSize="8" fontFamily="monospace" fontWeight="600">
-                  GOOD
+                  GREEN GOOD
                 </text>
 
-                {/* Defect Bowl */}
+                {/* Pink DEFECT Bowl */}
                 <motion.circle
                   cx="245"
                   cy="50"
@@ -181,7 +186,7 @@ export default function DualCameraFeed({ currentCycle, cellState = 'HOME', polic
                   transition={{ repeat: Infinity, duration: 1.8 }}
                 />
                 <text x="245" y="54" textAnchor="middle" fill="#f28d95" fontSize="8" fontFamily="monospace" fontWeight="600">
-                  DEFECT
+                  PINK DEFECT
                 </text>
 
                 {/* Trajectory Path */}
@@ -348,7 +353,7 @@ export default function DualCameraFeed({ currentCycle, cellState = 'HOME', polic
 
             {/* Score floating chip */}
             <div className="absolute bottom-2.5 right-2.5 z-10 bg-[#070a0f]/85 backdrop-blur-md px-2.5 py-0.5 rounded-md border border-white/[0.08] font-mono text-[10.5px]">
-              <span className="text-[#8e9bae]">{currentCycle?.model || 'patchcore_256'} · </span>
+              <span className="text-[#8e9bae]">{currentCycle?.model || 'patchcore_v1'} · </span>
               <span className="font-semibold" style={{ color: strokeAccent }}>
                 {score.toFixed(3)}
               </span>

@@ -3,10 +3,10 @@ import { motion } from 'framer-motion';
 import { Eye, ShieldAlert, Cpu, Bot, Sparkles } from 'lucide-react';
 
 const STAGES = [
-  { id: 'PERCEIVE', step: '01', title: 'Perceive', sub: 'PICK_PRESENT', icon: Eye },
-  { id: 'DETECT', step: '02', title: 'Detect', sub: 'PatchCore NPU', icon: ShieldAlert },
-  { id: 'REASON', step: '03', title: 'Decide', sub: 't_low / t_high', icon: Cpu },
-  { id: 'ACT', step: '04', title: 'Act', sub: 'VLA SO-101', icon: Bot },
+  { id: 'PERCEIVE', step: '01', title: 'Perceive', sub: 'ACT v2 Pick (12ms)', icon: Eye },
+  { id: 'DETECT', step: '02', title: 'Detect', sub: 'patchcore_v1 NPU', icon: ShieldAlert },
+  { id: 'REASON', step: '03', title: 'Decide', sub: '0.45 / 0.60 Band', icon: Cpu },
+  { id: 'ACT', step: '04', title: 'Act', sub: 'SmolVLA 104ms GPU', icon: Bot },
   { id: 'OPTIMIZE', step: '05', title: 'Audit', sub: 'B300 · MariaDB', icon: Sparkles },
 ];
 

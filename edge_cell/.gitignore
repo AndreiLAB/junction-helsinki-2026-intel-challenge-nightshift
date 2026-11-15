@@ -1,0 +1,21 @@
+# data and run outputs
+data/
+runs/
+# big model files
+*.bin
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.xml
+!configs/**/*.xml
+*.zip
+*.tar
+*.tar.gz
+models/**/weights/
+# python
+__pycache__/
+*.pyc
+.venv*/
+.pytest_cache/

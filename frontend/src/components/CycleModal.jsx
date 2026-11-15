@@ -55,7 +55,7 @@ export default function CycleModal({ cycle, policyBounds, onClose }) {
   const isRegrasp = verdict === 'UNCERTAIN' || verdict === 'NO_BRICK';
   const similarDefects = hasInlineSimilar ? cycle.similar_defects : fetchedSimilar;
   const topNeighbors = (similarDefects || []).slice(0, 3);
-  const tLow = Number(cycle.t_low ?? policyBounds?.t_low ?? 0.35);
+  const tLow = Number(cycle.t_low ?? policyBounds?.t_low ?? 0.45);
   const tHigh = Number(cycle.t_high ?? policyBounds?.t_high ?? 0.60);
   const scoreVal = Number(cycle.score ?? cycle.anomaly_score ?? 0);
   const views = Array.isArray(cycle.views) ? cycle.views : [];

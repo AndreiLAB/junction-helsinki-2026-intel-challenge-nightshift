@@ -1,0 +1,13 @@
+{
+ "model": "act_quick (Studio ACT, 10 eps)",
+ "device": "CPU",
+ "precision": "FP32",
+ "latency_ms_p50": 63.5,
+ "latency_ms_p95": 66.0,
+ "fps": 15.7,
+ "compile_s": 0.8,
+ "size_mb": null,
+ "quality_metric": "pick_present success (robot)",
+ "quality": "2/2",
+ "evidence": "REAL, zero inputs, tests/probe_inference.py"
+}

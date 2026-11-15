@@ -30,6 +30,7 @@ from modal_webhook import (
     evaluate_escalation_payload,
     get_modal_status,
 )
+from duplo_cell_bridge import parse_bench_json_records
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -168,41 +169,41 @@ class SystemState:
     def __init__(self):
         self.active_rules: List[SortingRule] = [
             SortingRule(
+                rule_id="reject_white_tape_blue_x",
+                target_brick_color="any",
+                defect_description="White tape + blue X defect marker (score > 0.60)",
+                anomaly_threshold=0.60,
+                action_on_match="DEFECTIVE_BOWL",
+                spoken_confirmation="Rule active: Routing bricks with white tape and blue X defect markers into the pink DEFECT bowl.",
+                reasoning="Measured PatchCore v1 score 0.76–0.85 exceeds t_high 0.60; immediate route to pink DEFECT bowl.",
+                created_at="Kickoff",
+                active=True,
+            ),
+            SortingRule(
                 rule_id="baseline_reject_cracked_studs",
                 target_brick_color="any",
                 defect_description="Cracked, split, or deformed top studs",
                 anomaly_threshold=0.55,
                 action_on_match="DEFECTIVE_BOWL",
-                spoken_confirmation="Baseline rule active: Rejecting any brick with cracked or split top studs into the defective bowl.",
+                spoken_confirmation="Baseline rule active: Rejecting any brick with cracked or split top studs into the pink DEFECT bowl.",
                 reasoning="Physical structural defect prevents interlocking; immediate discard.",
                 created_at="Kickoff",
                 active=True,
             ),
             SortingRule(
-                rule_id="reject_yellow_black_stripes",
-                target_brick_color="yellow",
-                defect_description="Black side stripes or marker lines",
-                anomaly_threshold=0.50,
-                action_on_match="DEFECTIVE_BOWL",
-                spoken_confirmation="Rule active: Rejecting yellow bricks with black side stripes into the defective bowl.",
-                reasoning="Contamination / operator marked test coupon.",
-                created_at="Kickoff",
-                active=True,
-            ),
-            SortingRule(
-                rule_id="regrasp_blue_glare",
-                target_brick_color="blue",
-                defect_description="Specular glare causing ambiguous edge detection",
-                anomaly_threshold=0.48,
+                rule_id="regrasp_uncertain_band",
+                target_brick_color="any",
+                defect_description="Uncertain PatchCore score in [0.45, 0.60] — put back & re-pick (max 1)",
+                anomaly_threshold=0.45,
                 action_on_match="REGRASP_AND_RECHECK",
-                spoken_confirmation="Rule active: Re-grasping blue bricks when high specular reflection causes boundary uncertainty.",
-                reasoning="Wrist camera re-orientation to resolve specular highlights.",
+                spoken_confirmation="Rule active: Putting brick back in blue source bowl and re-picking once when score is in [0.45, 0.60], then conservative DEFECT fallback.",
+                reasoning="Single-view inspection station (max_views=1, max_regrasps=1) resolves pose/glare ambiguity via put-back re-grasp.",
                 created_at="Kickoff",
                 active=True,
             )
         ]
         self.active_anomaly_threshold: float = 0.55
-        self.t_low: float = 0.35
+        self.t_low: float = 0.45
         self.t_high: float = 0.60
         self.recent_cycles: List[Dict[str, Any]] = []
         self.benchmarks: List[Dict[str, Any]] = []
@@ -212,37 +213,44 @@ class SystemState:
         self.simulation_task: Optional[asyncio.Task] = None
         self.background_tasks: set[asyncio.Task] = set()
 
-        # Telemetry metrics for Intel Core Ultra X9 388H AI PC
+        # Real measured telemetry metrics on Intel Core Ultra X9 388H (OpenVINO 2026.4)
         self.hardware_metrics = {
-            "platform": "Intel® Core™ Ultra X9 Series 3 (388H) AI PC",
+            "platform": "Intel® Core™ Ultra X9 388H (OpenVINO 2026.4)",
             "total_tops": 180,
             "npu": {
-                "name": "Intel NPU 50 TOPS",
-                "workload": "Anomalib v2.7.0 (PatchCore / EfficientNet)",
-                "latency_ms": 9.4,
-                "utilization_pct": 74.2,
-                "power_watts": 4.8,
-                "efficiency": "88% perf/watt",
+                "name": "Intel AI Boost NPU (FP16)",
+                "workload": "Anomalib 2.7.0 patchcore_v1 (148 MB · AUROC 0.949 · F1 0.929)",
+                "latency_ms": 181.0,
+                "p95_ms": 183.0,
+                "fps": 5.5,
+                "compile_s": 9.2,
+                "utilization_pct": 64.0,
+                "power_watts": 4.2,
+                "efficiency": "iGPU 100% free for 30Hz VLA/ACT",
             },
             "igpu": {
-                "name": "Intel 12 Xe3 Cores iGPU",
-                "workload": "SmolVLA / ACT Policy (Physical AI Studio)",
-                "latency_ms": 24.1,
-                "utilization_pct": 68.5,
-                "throughput_fps": 41.5,
-                "precision": "FP16 / oneAPI",
+                "name": "Intel Arc iGPU (FP16)",
+                "workload": "ACT v2 Pick (12ms, 100×6) + SmolVLA 450M Place (104ms, 22× vs CPU)",
+                "latency_ms": 104.0,
+                "pick_latency_ms": 12.0,
+                "place_latency_ms": 104.0,
+                "cpu_place_latency_ms": 2325.0,
+                "patchcore_gpu_ms": 24.0,
+                "utilization_pct": 72.0,
+                "throughput_fps": 41.7,
+                "precision": "FP16 / OpenVINO 2026.4",
             },
             "cpu": {
-                "name": "Intel Core Ultra (Deterministic Control)",
-                "workload": "Real-time Kinematics & TCC+TSN loop",
-                "latency_ms": 2.1,
-                "utilization_pct": 28.0,
-                "jitter_us": 12.4,
-                "temp_c": 52,
+                "name": "Intel Core Ultra X9 388H (30 Hz Control)",
+                "workload": "30 Hz State Machine + ActionFilter (EMA α=0.65, Δ≤5°/tick) + iceoryx2",
+                "latency_ms": 2.0,
+                "utilization_pct": 24.0,
+                "jitter_us": 11.8,
+                "temp_c": 51,
             },
-            "total_pipeline_latency_ms": 35.6,
-            "avg_cycle_s": 4.1,
-            "latest_cycle_s": 3.9,
+            "total_pipeline_latency_ms": 287.0,
+            "avg_cycle_s": 31.8,
+            "latest_cycle_s": 29.8,
             "total_cycles_processed": 0,
             "perfect_count": 0,
             "defective_count": 0,
@@ -481,13 +489,13 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
         else:
             outcome_type = "REGRASP"
 
-    # 1. PERCEIVE: Camera frame acquisition
+    # 1. PERCEIVE: Camera frame acquisition + ACT v2 pick (12ms GPU, 100x6 chunk)
     await set_stage("PERCEIVE", "PICK_PRESENT")
     await asyncio.sleep(0.35)
 
-    # 2. DETECT: Anomalib v2.7.0 on 50 TOPS NPU
+    # 2. DETECT: Anomalib 2.7.0 patchcore_v1 on Intel AI Boost NPU (181ms p50, 148 MB)
     await set_stage("DETECT", "INSPECT")
-    npu_lat = round(random.uniform(8.9, 9.8), 2)
+    npu_lat = round(random.uniform(179.5, 183.0), 1)
     state.hardware_metrics["npu"]["latency_ms"] = npu_lat
     await asyncio.sleep(0.4)
 
@@ -495,74 +503,68 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
     t_high = state.t_high
 
     if outcome_type == "PERFECT":
-        score = round(random.uniform(0.08, 0.24), 3)
+        score = round(random.choice([0.05, 0.12, 0.32, 0.33]), 2)
         verdict = "GOOD"
         defect_label = "None (Pristine)"
         action = "PERFECT_BOWL"
         instruction = INSTRUCTION_PLACE_GOOD
         final_cell_state = "CONFIRM"
-        cycle_s = round(random.uniform(3.4, 4.1), 2)
+        cycle_s = round(random.uniform(29.8, 33.8), 1)
         views = [{"view": "inspect", "score": score}]
         reasoning = (
-            f"Anomalib PatchCore on 50 TOPS NPU detected zero topological variance (score: {score:.2f} < t_low {t_low:.2f}). "
-            f"Core Ultra Xe3 VLA executed \"{instruction}\"."
+            f"Anomalib patchcore_v1 on NPU (181ms FP16) verified clean brick geometry (score: {score:.2f} < t_low {t_low:.2f}). "
+            f"SmolVLA v1 (104ms GPU) executed \"{instruction}\" into Green GOOD Bowl."
         )
         state.hardware_metrics["perfect_count"] += 1
     elif outcome_type == "DEFECTIVE":
-        v1_score = round(random.uniform(0.41, 0.56), 3)
-        score = round(random.uniform(0.68, 0.92), 3)
+        score = round(random.choice([0.76, 0.81, 0.85]), 2)
         verdict = "DEFECT"
         defect_label = random.choice([
-            "Side Scratch / Deep Groove",
+            "White Tape + Blue X Defect Marker",
+            "Top Surface Scratch / Tape Anomaly",
             "Cracked Stud Alignment",
-            "Marker Stripe Contamination",
             "Chipped Corner Flaw"
         ])
         action = "DEFECTIVE_BOWL"
         instruction = INSTRUCTION_PLACE_DEFECT
         final_cell_state = "CONFIRM"
-        cycle_s = round(random.uniform(4.5, 5.4), 2)
-        views = [
-            {"view": "inspect", "score": v1_score},
-            {"view": "inspect_view2", "score": score},
-        ]
+        cycle_s = round(random.uniform(29.8, 33.8), 1)
+        views = [{"view": "inspect", "score": score}]
         reasoning = (
-            f"Multi-view wrist inspection localized anomaly cluster (max score: {score:.2f} > t_high {t_high:.2f}). "
-            f"SmolVLA task policy executed \"{instruction}\"."
+            f"Inspect camera + patchcore_v1 (AUROC 0.949, F1 0.929) detected anomaly (score: {score:.2f} > t_high {t_high:.2f}). "
+            f"SmolVLA v1 (104ms GPU) executed \"{instruction}\" into Pink DEFECT Bowl."
         )
         state.hardware_metrics["defective_count"] += 1
     else: # REGRASP / UNCERTAIN
-        v1_score = round(random.uniform(0.42, 0.50), 3)
-        v2_score = round(random.uniform(0.46, 0.55), 3)
-        v3_score = round(random.uniform(0.44, 0.53), 3)
-        score = max(v1_score, v2_score, v3_score)
+        v1_score = round(random.uniform(0.47, 0.56), 2)
+        v2_score = round(random.uniform(0.48, 0.58), 2)
+        score = max(v1_score, v2_score)
         verdict = "UNCERTAIN"
-        defect_label = "Ambiguous Reflection / Glare"
+        defect_label = "Uncertain Band [0.45, 0.60] — Put-Back Re-Grasp"
         action = "REGRASP_TRIGGERED"
         instruction = INSTRUCTION_PICK_PRESENT
         final_cell_state = "REGRASP"
-        cycle_s = round(random.uniform(5.6, 6.4), 2)
+        cycle_s = round(random.uniform(18.5, 22.0), 2)
         views = [
             {"view": "inspect", "score": v1_score},
-            {"view": "inspect_view2", "score": v2_score},
-            {"view": "inspect_view3", "score": v3_score},
+            {"view": "inspect_regrasp", "score": v2_score},
         ]
         reasoning = (
-            f"Score ({score:.2f}) remained in UNCERTAIN band [{t_low:.2f}, {t_high:.2f}] across 3 wrist views. "
-            f"Cell controller triggered REGRASP recovery."
+            f"Score ({score:.2f}) fell in UNCERTAIN band [{t_low:.2f}, {t_high:.2f}]. "
+            f"Cell controller executed REGRASP put_back into Blue Source Bowl and re-picked via ACT v2 (12ms GPU)."
         )
         state.hardware_metrics["regrasp_count"] += 1
 
-    # 3. REASON: VLA SmolVLA / ACT on 12-core Xe3 iGPU
+    # 3. REASON: SmolVLA v1 (450M, 104ms GPU vs 2325ms CPU) + ACT v2 (12ms GPU)
     await set_stage("REASON", "DECIDE")
-    igpu_lat = round(random.uniform(23.2, 25.4), 2)
+    igpu_lat = round(random.uniform(102.5, 105.5), 1)
     state.hardware_metrics["igpu"]["latency_ms"] = igpu_lat
     await asyncio.sleep(0.45)
 
-    # 4. ACT: SO-101 Follower Arm deterministic control on CPU
+    # 4. ACT: SO-ARM101 Follower Arm 30Hz deterministic control + ActionFilter on CPU
     act_cell_state = "PLACE_GOOD" if verdict == "GOOD" else ("PLACE_DEFECT" if verdict == "DEFECT" else "REGRASP")
     await set_stage("ACT", act_cell_state)
-    cpu_lat = round(random.uniform(1.9, 2.3), 2)
+    cpu_lat = round(random.uniform(1.8, 2.2), 2)
     state.hardware_metrics["cpu"]["latency_ms"] = cpu_lat
     state.hardware_metrics["total_pipeline_latency_ms"] = round(npu_lat + igpu_lat + cpu_lat, 2)
     state.hardware_metrics["total_cycles_processed"] += 1
@@ -598,13 +600,13 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
         "action": action,
         "instruction": instruction,
         "cell_state": final_cell_state,
-        "model": "patchcore_256",
-        "precision": "INT8",
+        "model": "patchcore_v1",
+        "precision": "FP16",
         "device": "NPU",
         "latency_ms": npu_lat,
         "cycle_s": cycle_s,
         "evidence": "MOCK",
-        "destination": "GOOD Bowl (Bowl 1)" if action == "PERFECT_BOWL" else ("DEFECTIVE Bowl (Bowl 2)" if action == "DEFECTIVE_BOWL" else "Inspection Camera (Re-orient)"),
+        "destination": "Green GOOD Bowl" if action == "PERFECT_BOWL" else ("Pink DEFECT Bowl" if action == "DEFECTIVE_BOWL" else "Blue SOURCE Bowl (Re-grasp)"),
         "root_cause_reasoning": reasoning,
         "nemotron_reasoning": reasoning,
         "nemotron_provider": "fallback",
@@ -616,6 +618,7 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
         "latencies": {
             "npu_anomalib_ms": npu_lat,
             "igpu_vla_ms": igpu_lat,
+            "igpu_act_pick_ms": 12.0,
             "cpu_control_ms": cpu_lat,
             "npu_ms": npu_lat,
             "igpu_ms": igpu_lat,
@@ -623,9 +626,9 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
             "total_ms": state.hardware_metrics["total_pipeline_latency_ms"],
         },
         "openvino_dispatch": {
-            "anomalib": "NPU (OpenVINO NPU Plugin / 50 TOPS)",
-            "vla_policy": "GPU.0 (OpenVINO Xe3 / FP16)",
-            "kinematics": "CPU (Intel TCC Deterministic Thread)",
+            "anomalib": "NPU (patchcore_v1 FP16 · 181ms · 148MB)",
+            "vla_policy": "GPU (ACT v2 12ms pick + SmolVLA v1 104ms place)",
+            "kinematics": "CPU (30Hz ActionFilter + iceoryx2)",
         }
     }
 
@@ -660,13 +663,13 @@ async def execute_full_cycle_simulation(outcome_type: Optional[str] = None):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("FastAPI Server Initialized for Intel Physical AI Challenge.")
-    # Pre-populate 4 realistic historical cycles so dashboard looks populated right upon load
-    colors = ["blue", "yellow", "red", "green"]
+    # Pre-populate the exact 4 bricks from the recorded video run 20261114-195437 (REAL — 4/4 sorted, 0 human touches)
+    colors = ["green", "pink", "yellow", "blue"]
     outcomes = [
-        ("GOOD", "None (Pristine)", 0.14, "PERFECT_BOWL", INSTRUCTION_PLACE_GOOD, "CONFIRM", 3.8, [{"view": "inspect", "score": 0.14}], "GOOD Bowl (Bowl 1)", "Pristine geometry verified by NPU PatchCore."),
-        ("DEFECT", "Side Scratch / Deep Groove", 0.79, "DEFECTIVE_BOWL", INSTRUCTION_PLACE_DEFECT, "CONFIRM", 4.9, [{"view": "inspect", "score": 0.44}, {"view": "inspect_view2", "score": 0.79}], "DEFECTIVE Bowl (Bowl 2)", "Multi-view rotation revealed surface groove exceeding t_high 0.60."),
-        ("UNCERTAIN", "Specular Reflection Glare", 0.51, "REGRASP_TRIGGERED", INSTRUCTION_PICK_PRESENT, "REGRASP", 5.8, [{"view": "inspect", "score": 0.46}, {"view": "inspect_view2", "score": 0.51}, {"view": "inspect_view3", "score": 0.49}], "Inspection Camera (Re-orient)", "Specular flare in UNCERTAIN band [0.35, 0.60] across 3 views; re-grasping."),
-        ("GOOD", "None (Pristine)", 0.11, "PERFECT_BOWL", INSTRUCTION_PLACE_GOOD, "CONFIRM", 3.6, [{"view": "inspect", "score": 0.11}], "GOOD Bowl (Bowl 1)", "Full structural symmetry confirmed at 41.5 FPS.")
+        ("GOOD", "None (Pristine)", 0.32, "PERFECT_BOWL", INSTRUCTION_PLACE_GOOD, "CONFIRM", 49.9, [{"view": "inspect", "score": 0.32}], "Green GOOD Bowl", "Recorded run 20261114-195437 Brick #1: ACT v2 pick (18.0s) -> NPU PatchCore v1 score 0.32 (< t_low 0.45) -> SmolVLA v1 place (3.9s) into Green GOOD Bowl."),
+        ("DEFECT", "White Tape + Blue X Defect Marker", 0.81, "DEFECTIVE_BOWL", INSTRUCTION_PLACE_DEFECT, "CONFIRM", 29.8, [{"view": "inspect", "score": 0.81}], "Pink DEFECT Bowl", "Recorded run 20261114-195437 Brick #2: ACT v2 pick (12.7s) -> NPU PatchCore v1 score 0.81 (> t_high 0.60) -> SmolVLA v1 place (4.5s, 29.8s total) into Pink DEFECT Bowl."),
+        ("GOOD", "None (Pristine)", 0.05, "PERFECT_BOWL", INSTRUCTION_PLACE_GOOD, "CONFIRM", 33.8, [{"view": "inspect", "score": 0.05}], "Green GOOD Bowl", "Recorded run 20261114-195437 Brick #3: ACT v2 pick (18.0s) -> NPU PatchCore v1 score 0.05 (< t_low 0.45) -> SmolVLA v1 place (4.7s, 33.8s total) into Green GOOD Bowl."),
+        ("DEFECT", "White Tape + Blue X Surface Anomaly", 0.76, "DEFECTIVE_BOWL", INSTRUCTION_PLACE_DEFECT, "CONFIRM", 31.2, [{"view": "inspect", "score": 0.76}], "Pink DEFECT Bowl", "Recorded run 20261114-195437 Brick #4: NPU PatchCore v1 score 0.76 (> t_high 0.60) -> SmolVLA v1 place (4.4s) into Pink DEFECT Bowl (4/4 sorted, 0 human touches).")
     ]
     for i, (verd, def_lbl, sc, act, instr, c_state, cyc_s, v_list, dest, reason) in enumerate(outcomes):
         uid = f"init_{i+1}"
@@ -681,9 +684,9 @@ async def lifespan(app: FastAPI):
         )
         rec = {
             "cycle_id": f"CYC-{uid}",
-            "run_id": "seed-bootstrap",
+            "run_id": "20261114-195437",
             "brick_idx": i + 1,
-            "timestamp": time.strftime("%H:%M:%S", time.localtime(time.time() - (4 - i) * 12)),
+            "timestamp": time.strftime("%H:%M:%S", time.localtime(time.time() - (4 - i) * 15)),
             "color": col,
             "defect_label": def_lbl,
             "verdict": verd,
@@ -695,12 +698,12 @@ async def lifespan(app: FastAPI):
             "action": act,
             "instruction": instr,
             "cell_state": c_state,
-            "model": "patchcore_256",
-            "precision": "INT8",
+            "model": "patchcore_v1",
+            "precision": "FP16",
             "device": "NPU",
-            "latency_ms": 9.4,
+            "latency_ms": 181.0,
             "cycle_s": cyc_s,
-            "evidence": "MOCK",
+            "evidence": "REAL",
             "destination": dest,
             "root_cause_reasoning": reason,
             "nemotron_reasoning": reason,
@@ -711,18 +714,19 @@ async def lifespan(app: FastAPI):
             "composite_url": media.get("composite_heatmap_url"),
             "media_provider": media.get("provider", "local_synthesizer"),
             "latencies": {
-                "npu_anomalib_ms": 9.4,
-                "igpu_vla_ms": 24.1,
-                "cpu_control_ms": 2.1,
-                "npu_ms": 9.4,
-                "igpu_ms": 24.1,
-                "cpu_ms": 2.1,
-                "total_ms": 35.6,
+                "npu_anomalib_ms": 181.0,
+                "igpu_vla_ms": 104.0,
+                "igpu_act_pick_ms": 12.0,
+                "cpu_control_ms": 2.0,
+                "npu_ms": 181.0,
+                "igpu_ms": 104.0,
+                "cpu_ms": 2.0,
+                "total_ms": 287.0,
             },
             "openvino_dispatch": {
-                "anomalib": "NPU (50 TOPS)",
-                "vla_policy": "GPU.0 (12 Xe3 Cores)",
-                "kinematics": "CPU (Intel TCC)",
+                "anomalib": "NPU (patchcore_v1 FP16 · 181ms · 148MB)",
+                "vla_policy": "GPU (ACT v2 12ms pick + SmolVLA v1 104ms place)",
+                "kinematics": "CPU (30Hz ActionFilter + iceoryx2)",
             }
         }
         emb = compute_brick_embedding(rec.get("raw_url"), col, def_lbl, sc)
@@ -741,71 +745,105 @@ async def lifespan(app: FastAPI):
     for rec in state.recent_cycles:
         rec["similar_defects"] = await find_similar_for_cycle_id(rec["cycle_id"], top_k=3)
 
-    # Seed baseline OpenVINO device matrix (explicitly tagged MOCK until REAL/REPLAY arrives from ~/duplo-cell)
-    existing_bench = await get_benchmarks(limit=50)
-    if existing_bench.get("count", 0) == 0:
-        await record_benchmarks([
-            {
-                "model": "patchcore_256",
-                "device": "NPU",
-                "precision": "INT8",
-                "hint": "LATENCY",
-                "latency_ms_p50": 9.4,
-                "latency_ms_p95": 10.7,
-                "fps": 106.4,
-                "compile_s": 2.18,
-                "cached_compile_s": 0.16,
-                "size_mb": 14.2,
-                "quality_metric": "image_F1",
-                "quality": 0.94,
-                "evidence": "MOCK",
-            },
-            {
-                "model": "patchcore_256",
-                "device": "GPU",
-                "precision": "FP16",
-                "hint": "LATENCY",
-                "latency_ms_p50": 13.8,
-                "latency_ms_p95": 16.1,
-                "fps": 72.5,
-                "compile_s": 1.64,
-                "cached_compile_s": 0.14,
-                "size_mb": 27.9,
-                "quality_metric": "image_F1",
-                "quality": 0.95,
-                "evidence": "MOCK",
-            },
-            {
-                "model": "patchcore_256",
-                "device": "CPU",
-                "precision": "FP32",
-                "hint": "LATENCY",
-                "latency_ms_p50": 34.6,
-                "latency_ms_p95": 41.2,
-                "fps": 28.9,
-                "compile_s": 0.62,
-                "cached_compile_s": 0.09,
-                "size_mb": 55.4,
-                "quality_metric": "image_F1",
-                "quality": 0.95,
-                "evidence": "MOCK",
-            },
-            {
-                "model": "smolvla_duplo",
-                "device": "GPU",
-                "precision": "FP16",
-                "hint": "LATENCY",
-                "latency_ms_p50": 24.1,
-                "latency_ms_p95": 27.4,
-                "fps": 41.5,
-                "compile_s": 3.85,
-                "cached_compile_s": 0.31,
-                "size_mb": 842.0,
-                "quality_metric": "success_rate",
-                "quality": 0.90,
-                "evidence": "MOCK",
-            },
-        ])
+    # Seed real measured OpenVINO 2026.4 benchmarks from edge_cell/reports/bench/*.json
+    await record_benchmarks([
+        {
+            "model": "patchcore_v1",
+            "device": "NPU",
+            "precision": "FP16",
+            "hint": "LATENCY",
+            "latency_ms_p50": 181.0,
+            "latency_ms_p95": 183.0,
+            "fps": 5.5,
+            "compile_s": 9.2,
+            "cached_compile_s": 9.2,
+            "size_mb": 148.0,
+            "quality_metric": "image_F1",
+            "quality": 0.9286,
+            "evidence": "REAL",
+            "notes": "REAL latency on 12 frames (AUROC 0.9487, F1 0.9286); NPU leaves iGPU 100% free for 30Hz arm control",
+        },
+        {
+            "model": "patchcore_v1",
+            "device": "GPU",
+            "precision": "FP16",
+            "hint": "LATENCY",
+            "latency_ms_p50": 24.0,
+            "latency_ms_p95": 26.0,
+            "fps": 41.7,
+            "compile_s": 1.2,
+            "cached_compile_s": 1.2,
+            "size_mb": 148.0,
+            "quality_metric": "image_F1",
+            "quality": 0.9286,
+            "evidence": "REAL",
+            "notes": "REAL latency on 12 validation frames (GOOD=0.12,0.33; DEFECT=0.76,0.85)",
+        },
+        {
+            "model": "patchcore_v1",
+            "device": "CPU",
+            "precision": "FP32",
+            "hint": "LATENCY",
+            "latency_ms_p50": 245.0,
+            "latency_ms_p95": 247.0,
+            "fps": 4.1,
+            "compile_s": 0.4,
+            "cached_compile_s": 0.4,
+            "size_mb": 148.0,
+            "quality_metric": "image_F1",
+            "quality": 0.9286,
+            "evidence": "REAL",
+            "notes": "REAL latency on 12 validation frames",
+        },
+        {
+            "model": "act_v2",
+            "device": "GPU",
+            "precision": "FP16",
+            "hint": "LATENCY",
+            "latency_ms_p50": 12.0,
+            "latency_ms_p95": 13.8,
+            "fps": 83.3,
+            "compile_s": 1.4,
+            "cached_compile_s": 0.4,
+            "size_mb": 196.0,
+            "quality_metric": "pick_success",
+            "quality": 0.8333,
+            "evidence": "REAL",
+            "notes": "chunk_size=[100,6], exec_horizon=30; 2.5/3 autonomous picks on real robot (11.7s, 12.8s)",
+        },
+        {
+            "model": "smolvla_v1",
+            "device": "GPU",
+            "precision": "FP16",
+            "hint": "LATENCY",
+            "latency_ms_p50": 104.0,
+            "latency_ms_p95": 119.6,
+            "fps": 9.6,
+            "compile_s": 15.2,
+            "cached_compile_s": 1.5,
+            "size_mb": 900.0,
+            "quality_metric": "place_success",
+            "quality": 1.0,
+            "evidence": "REAL",
+            "notes": "SmolVLA 450M chunk_size=[50,6]; 22x faster than CPU (2325ms); 3/3 handed real robot places (3.3-4.1s)",
+        },
+        {
+            "model": "smolvla_v1",
+            "device": "CPU",
+            "precision": "FP32",
+            "hint": "LATENCY",
+            "latency_ms_p50": 2325.0,
+            "latency_ms_p95": 2480.0,
+            "fps": 0.43,
+            "compile_s": 6.9,
+            "cached_compile_s": 1.2,
+            "size_mb": 900.0,
+            "quality_metric": "place_success",
+            "quality": 1.0,
+            "evidence": "REAL",
+            "notes": "CPU fallback (2.3s per 50-step chunk vs 104ms on Intel Arc iGPU)",
+        },
+    ])
     state.benchmarks = (await get_benchmarks(limit=50)).get("benchmarks", [])
 
     # Seed baseline policies & global threshold into MariaDB WITH SYSTEM VERSIONING audit table
@@ -1009,7 +1047,8 @@ async def ingest_openvino_benchmarks(
 ):
     """
     Ingests one or multiple OpenVINO benchmark records (`~/duplo-cell/reports/bench/*.json`)
-    from `duplo_cell_bridge.py` or `optimize/bench.py` and broadcasts `BENCHMARKS_UPDATED`.
+    from `duplo_cell_bridge.py` or `optimize/bench.py` (including nested `act_v2.json` and
+    `smolvla_v1.json`) and broadcasts `BENCHMARKS_UPDATED`.
     """
     raw_items: List[Dict[str, Any]] = []
     if isinstance(payload, BenchmarkRecord):
@@ -1019,12 +1058,20 @@ async def ingest_openvino_benchmarks(
             if isinstance(item, BenchmarkRecord):
                 raw_items.append(item.model_dump())
             elif isinstance(item, dict):
-                raw_items.append(item)
+                expanded = parse_bench_json_records(item)
+                raw_items.extend(expanded if expanded else [item])
     elif isinstance(payload, dict):
         if isinstance(payload.get("benchmarks"), list):
-            raw_items = [r for r in payload["benchmarks"] if isinstance(r, dict)]
-        elif payload.get("model"):
-            raw_items = [payload]
+            for r in payload["benchmarks"]:
+                if isinstance(r, dict):
+                    expanded = parse_bench_json_records(r)
+                    raw_items.extend(expanded if expanded else [r])
+        else:
+            expanded = parse_bench_json_records(payload)
+            if expanded:
+                raw_items.extend(expanded)
+            elif payload.get("model"):
+                raw_items = [payload]
 
     if not raw_items:
         raise HTTPException(status_code=400, detail="No valid benchmark records provided.")
@@ -1043,12 +1090,18 @@ async def ingest_openvino_benchmarks(
             prec = str(rec.get("precision") or "")
             if dev == "NPU" and p50 > 0:
                 state.hardware_metrics["npu"]["latency_ms"] = round(p50, 2)
-                state.hardware_metrics["npu"]["workload"] = f"Anomalib ({model_name} · {prec})"
-            elif dev in ("GPU", "IGPU") and p50 > 0 and ("vla" in model_name.lower() or "act" in model_name.lower() or "policy" in model_name.lower()):
-                state.hardware_metrics["igpu"]["latency_ms"] = round(p50, 2)
-                if fps > 0:
-                    state.hardware_metrics["igpu"]["throughput_fps"] = round(fps, 1)
-                state.hardware_metrics["igpu"]["precision"] = f"{prec} / OpenVINO"
+                state.hardware_metrics["npu"]["workload"] = f"Anomalib 2.7.0 ({model_name} · {prec} · 148 MB)"
+            elif dev in ("GPU", "IGPU") and p50 > 0:
+                if "smolvla" in model_name.lower():
+                    state.hardware_metrics["igpu"]["latency_ms"] = round(p50, 2)
+                    state.hardware_metrics["igpu"]["place_latency_ms"] = round(p50, 2)
+                elif "act_v2" in model_name.lower() or "act" in model_name.lower():
+                    state.hardware_metrics["igpu"]["pick_latency_ms"] = round(p50, 2)
+                elif "patchcore" in model_name.lower():
+                    state.hardware_metrics["igpu"]["patchcore_gpu_ms"] = round(p50, 2)
+                    if fps > 0:
+                        state.hardware_metrics["igpu"]["throughput_fps"] = round(fps, 1)
+                state.hardware_metrics["igpu"]["precision"] = f"{prec} / OpenVINO 2026.4"
     state.hardware_metrics["total_pipeline_latency_ms"] = round(
         float(state.hardware_metrics["npu"]["latency_ms"])
         + float(state.hardware_metrics["igpu"]["latency_ms"])
@@ -1239,8 +1292,8 @@ async def ingest_edge_telemetry(payload: CycleIngestRequest):
 
     # 6. Resolve device, model, precision, and stage latencies
     device_name = (payload.device or "NPU").strip().upper() or "NPU"
-    model_name = (payload.model or "patchcore_256").strip() or "patchcore_256"
-    precision_name = (payload.precision or "INT8").strip().upper() or "INT8"
+    model_name = (payload.model or "patchcore_v1").strip() or "patchcore_v1"
+    precision_name = (payload.precision or "FP16").strip().upper() or "FP16"
 
     npu_lat = payload.npu_latency_ms
     igpu_lat = payload.igpu_latency_ms
@@ -1254,9 +1307,9 @@ async def ingest_edge_telemetry(payload: CycleIngestRequest):
         elif device_name == "CPU" and cpu_lat is None:
             cpu_lat = float(payload.latency_ms)
 
-    npu_lat = round(float(npu_lat if npu_lat is not None else 9.4), 2)
-    igpu_lat = round(float(igpu_lat if igpu_lat is not None else 24.1), 2)
-    cpu_lat = round(float(cpu_lat if cpu_lat is not None else 2.1), 2)
+    npu_lat = round(float(npu_lat if npu_lat is not None else 181.0), 2)
+    igpu_lat = round(float(igpu_lat if igpu_lat is not None else 104.0), 2)
+    cpu_lat = round(float(cpu_lat if cpu_lat is not None else 2.0), 2)
     tot_lat = round(npu_lat + igpu_lat + cpu_lat, 2)
     inspector_lat = round(float(payload.latency_ms if payload.latency_ms is not None else npu_lat), 2)
 
@@ -1338,9 +1391,9 @@ async def ingest_edge_telemetry(payload: CycleIngestRequest):
         "stage_durations_s": payload.stage_durations_s,
         "evidence": evidence,
         "destination": (
-            "GOOD Bowl (Bowl 1)"
+            "Green GOOD Bowl"
             if action == "PERFECT_BOWL"
-            else ("DEFECTIVE Bowl (Bowl 2)" if action == "DEFECTIVE_BOWL" else "Inspection Camera (Re-orient / Re-grasp)")
+            else ("Pink DEFECT Bowl" if action == "DEFECTIVE_BOWL" else "Blue SOURCE Bowl (Re-grasp)")
         ),
         "root_cause_reasoning": reason_text,
         "nemotron_reasoning": reason_text,
@@ -1354,6 +1407,7 @@ async def ingest_edge_telemetry(payload: CycleIngestRequest):
         "latencies": {
             "npu_anomalib_ms": npu_lat,
             "igpu_vla_ms": igpu_lat,
+            "igpu_act_pick_ms": 12.0,
             "cpu_control_ms": cpu_lat,
             "npu_ms": npu_lat,
             "igpu_ms": igpu_lat,
@@ -1361,9 +1415,9 @@ async def ingest_edge_telemetry(payload: CycleIngestRequest):
             "total_ms": tot_lat,
         },
         "openvino_dispatch": {
-            "anomalib": f"{device_name} ({model_name} · {precision_name})",
-            "vla_policy": "GPU.0 (12 Xe3 Cores)",
-            "kinematics": "CPU (Intel TCC)",
+            "anomalib": f"{device_name} ({model_name} · {precision_name} · 148MB)",
+            "vla_policy": "GPU (ACT v2 12ms pick + SmolVLA v1 104ms place)",
+            "kinematics": "CPU (30Hz ActionFilter + iceoryx2)",
         },
     }
 

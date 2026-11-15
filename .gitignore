@@ -1,6 +1,8 @@
 # Environments & Dependencies
 backend/.venv/
+edge_cell/.venv*/
 .venv/
+.venv*/
 node_modules/
 frontend/node_modules/
 frontend/dist/
@@ -17,11 +19,29 @@ __pycache__/
 env/
 venv/
 *.egg-info/
+.pytest_cache/
 
 # Secrets & Configs
 .env
 backend/.env
+edge_cell/.env
 *.local
+
+# Edge Cell Runtime & Oversized Binary Weights
+edge_cell/runs/
+edge_cell/data/
+edge_cell/models/**/weights/
+*.bin
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.xml
+!edge_cell/configs/**/*.xml
+*.zip
+*.tar
+*.tar.gz
 
 # Logs & temp
 *.log

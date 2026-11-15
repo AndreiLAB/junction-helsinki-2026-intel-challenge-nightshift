@@ -4,189 +4,151 @@
 
 # 🏭 Junction Helsinki 2026 — Intel Physical AI Challenge
 ## Team NightShift | Autonomous Duplo Brick Robotic Inspection Cell
-> **Lead Author:** Unified Cloud, AI & Data Hub Lead (Merged Member 3 + Member 4) — *Gemini 3.8 Copilot, Verda B300 Nemotron, MariaDB Vector Store, Modal Escalation, Cloudinary Media & Mission Control UI*
+
+> **Cleanly Separated Modules, One Unified Product** — Combining a **100% standalone 30 Hz Physical Edge Cell (`edge_cell/`)** on Intel Core Ultra X9 388H with an **asynchronous Cloud, AI & Data Hub (`backend/` + `frontend/`)** coupled solely through a non-blocking telemetry contract.
 
 ---
 
-## 🧭 Executive Summary (Unified Cloud, AI & Data Hub)
-
-This repository implements **Team NightShift's Unified Cloud, AI & Data Hub** — decoupling all heavy multimodal reasoning, vector similarity indexing, media compositing, and live telemetry visualization from the `<36 ms` local robot loop on the Ubuntu Intel Core Ultra X9 388H workstation (`~/duplo-cell`).
-
-Built in **Python FastAPI** and **React + Vite + Tailwind CSS**, the hub delivers:
-1. **Real-Time Closed-Loop Telemetry (`PERCEIVE → DETECT → REASON → ACT → OPTIMIZE`)** across Intel Core Ultra X9 388H heterogeneous silicon:
-   - **50-TOPS NPU:** Anomalib v2.7.0 PatchCore defect localization (~9.4 ms, 4.8W sustained).
-   - **12 Xe3 Cores (iGPU):** SmolVLA / ACT task planning via OpenVINO (~24.1 ms, 41.5 FPS).
-   - **Deterministic CPU:** Intel TCC + TSN real-time kinematics loop (~2.1 ms, jitter <15µs).
-   - **Total edge decision loop: ~35.6 ms (28+ Hz throughput)** with **0 ms** added cloud latency.
-2. **Gemini 3.8 Flash Hands-Free Floor Copilot (`backend/gemini_copilot.py`):** Operators show a marked brick coupon to the webcam and speak a rule in plain English, updating active sorting rules (`GET /api/policy`) with spoken audio confirmation.
-3. **Cloudinary Visual Audit Trail (`backend/cloudinary_media.py`):** Uploads raw inspection crops and Anomalib heatmaps, auto-compositing semi-transparent `l_overlay` (`opacity: 45`) layers.
-4. **Verda B300 NVIDIA Nemotron 3.5 Super VL Worker (`backend/nemotron_worker.py`):** Asynchronous background visual root-cause reasoning and dynamic anomaly threshold auto-tuning streamed live via `CYCLE_UPDATED` WebSocket events.
-5. **MariaDB 11.7+ `VECTOR(512)` Defect Store (`backend/mariadb_store.py`):** Indexes 512-dim visual + telemetry brick embeddings (`VEC_DISTANCE_COSINE`) to surface top-3 historical defect twins on every cycle (`GET /api/cycles/{id}/similar`), with automatic in-memory cosine fallback.
-6. **Modal Serverless Escalation Webhook (`backend/modal_webhook.py`):** Deployable `@modal.fastapi_endpoint` (`modal deploy backend/modal_webhook.py`) triggered asynchronously on `DEFECTIVE_BOWL` and `REGRASP_TRIGGERED` cycles for batch audit & retraining hooks.
-
----
-
-## 🏛 System Architecture
+## 🧭 Architecture: Two Decoupled Layers, One Unified Product
 
 <p align="center">
   <img src="docs/images/architecture.png" alt="NightShift System Architecture — A closed loop. Not just a prediction." width="100%" />
 </p>
 
 ```
-                                +------------------------------------------+
-                                |         Gemini 3.8 Flash Copilot         |
-                                |  (Webcam + Voice Hands-Free Commission)  |
-                                +--------------------+---------------------+
-                                                     | POST /api/copilot/rule
-                                                     v
-+--------------------------+        +--------------------+        +-------------------------+
-| CAM-01: Top-View (D415)  | -----> |  FastAPI Edge Hub  | <----- | LeRobot SO-ARM101       |
-| CAM-02: Wrist Crop (QHD) |        |   (Port 8000)      |        | Follower Manipulation   |
-+--------------------------+        +---------+----------+        +-------------------------+
-                                              |
-                   +--------------------------+--------------------------+
-                   |                          |                          |
-                   v                          v                          v
-          [NPU: 50 TOPS]             [iGPU: 12 Xe3 Cores]        [CPU: Deterministic]
-        Anomalib v2.7.0                SmolVLA / ACT Policy        Intel TCC + TSN Loop
-        PatchCore (~9.4ms)                (~24.1ms)                     (~2.1ms)
-                   \                          |                          /
-                    +-------------------------+-------------------------+
-                                              |
-                                              v
-                              +-------------------------------+
-                              |   Total Latency: ~35.6 ms     |
-                              |   Full Closed-Loop (28+ Hz)   |
-                              +---------------+---------------+
-                                              |
-                             +----------------+----------------+
-                             |                                 |
-                             v                                 v
-                +--------------------------+     +--------------------------+
-                | Cloudinary Visual Trail  |     | Mission Control UI       |
-                | (Auto Layer Overlays)    |     | (Vite + React Obsidian)  |
-                +--------------------------+     +--------------------------+
+                        3 cameras (top, inspect, wrist · 640×480@30fps via iceoryx2)
+                                              │
+        ┌─────────────────────────────────────┼──────────────────────────────────────┐
+        ▼                                     ▼                                      ▼
+  ACT v2 (OpenVINO, GPU)            PatchCore v1 (Anomalib, NPU)          SmolVLA 450M (OpenVINO, GPU)
+  "pick a brick and show it"        148 MB · AUROC 0.949 · F1 0.929       "put in the good bowl"
+  chunk 100×6 · 12 ms median        181 ms NPU (leaves GPU 100% free)     "put in the defective bowl"
+        │                           t_low = 0.45 · t_high = 0.60          chunk 50×6 · 104 ms (22× vs CPU)
+        └──────────────► 30 Hz State Machine + ActionFilter (CPU) ◄──────────────────┘
+                                              │
+                                    SO-ARM101 Follower Arm
+                       (Blue Source Bowl ──► Green GOOD / Pink DEFECT Bowl)
+                                              │
+                       Non-blocking telemetry │ runs/<id>/events.jsonl + heatmaps/*.png
+                                              ▼
+                     ┌────────────────────────────────────────────────┐
+                     │     backend/duplo_cell_bridge.py (0 ms lag)    │
+                     └────────────────────────┬───────────────────────┘
+                                              ▼
+        ┌────────────────────────────────────────────────────────────────────────────┐
+        │                  Layer 2: Cloud, AI & Data Hub (5/5 LIVE)                  │
+        ├────────────────┬────────────────┬────────────────┬────────────┬────────────┤
+        │ Gemini 3.8     │ Verda B300     │ Cloudinary     │ MariaDB    │ Modal      │
+        │ Flash Copilot  │ Nemotron VL    │ l_overlay      │ 11.8 LTS   │ Serverless │
+        │ Voice/Webcam   │ Root-Cause &   │ Raw + Heatmap  │ VECTOR(512)│ Volume +   │
+        │ Policy Rules   │ Threshold Tune │ Composite CDN  │ + Temporal │ Dict Audit │
+        └────────────────┴────────────────┴────────────────┴────────────┴────────────┘
 ```
+
+### Layer 1 — Physical Edge Cell (`edge_cell/`)
+Runs **100% locally** on the station laptop (**Intel Core Ultra X9 388H**, Intel Arc iGPU, Intel AI Boost NPU, Ubuntu 26.04, OpenVINO 2026.4) with zero cloud dependency at control time:
+- **Pick (`ACT v2` on Intel Arc iGPU):** `models/policy/act_v2`, chunk `100×6`, `exec_horizon=30` (re-plans from fresh camera images every 1 s), **`12 ms`** median chunk latency on GPU, trained on **154 demos**.
+- **Inspect (`PatchCore v1` on Intel AI Boost NPU):** `models/anomaly/patchcore_v1` (Anomalib 2.7.0, WideResNet-50, `148 MB`, `image_AUROC = 0.949`, `image_F1 = 0.929`), **`181 ms` p50 on NPU** (`24 ms` on iGPU, `245 ms` on CPU). Running inspection on the NPU leaves the iGPU **100% dedicated** to multi-Hz arm control.
+- **Place (`SmolVLA v1` 450M on Intel Arc iGPU):** `models/policy/current`, chunk `50×6`, language-conditioned on the inspection verdict (*"Put the brick in the good bowl."* vs *"Put the brick in the defective bowl."*), **`104 ms` median on GPU vs `2,325 ms` on CPU (`22×` GPU speedup)**.
+- **30 Hz Deterministic Control & Recovery (`CPU`):** Explicit state machine (`HOME → PICK_PRESENT → SNAP_TO_INSPECT → INSPECT → DECIDE → PLACE_GOOD / PLACE_DEFECT / REGRASP → CONFIRM → DONE`) + `ActionFilter` (EMA $\alpha=0.65$, $\le 5^\circ/\text{tick}$ clamp, workspace guard). Uncertain scores (`[0.45, 0.60]`) trigger a put-back re-grasp (`max_regrasps=1`) with conservative `DEFECT` fallback.
+
+### Layer 2 — Cloud, AI & Data Hub (`backend/` + `frontend/`)
+Coupled **only** through the non-blocking telemetry contract (`runs/<run_id>/events.jsonl`, `runs/<run_id>/heatmaps/*.png`, `reports/bench/*.json`, and `configs/station.yaml`):
+1. **Precision Optics Mission Control (`frontend/`):** React 19 + Framer Motion + Tailwind CSS cockpit streaming live FSM transitions, dual-camera ROI/heatmap overlays, `t_low=0.45 / t_high=0.60` decision gauge, and OpenVINO 2026.4 silicon benchmarks over `/ws/live`.
+2. **Gemini 3.8 Flash Floor Copilot (`backend/gemini_copilot.py`):** Multimodal operator commissioning via webcam, microphone, or text prompt with spoken synthesis confirmation.
+3. **Verda B300 NVIDIA Nemotron 3.5 Super VL (`backend/nemotron_worker.py`):** Asynchronous visual root-cause reasoning and anomaly threshold calibration.
+4. **Cloudinary Visual Vault (`backend/cloudinary_media.py`):** Programmatic raw crop & PatchCore heatmap uploads with chained `l_overlay` compositing.
+5. **MariaDB 11.8 LTS `VECTOR(512)` + `WITH SYSTEM VERSIONING` (`backend/mariadb_store.py`):** Native `VEC_DISTANCE_COSINE` 512-dim defect twin search (`GET /api/cycles/{id}/similar`) plus temporal `FOR SYSTEM_TIME ALL` policy audit history (`GET /api/policies/history`).
+6. **Modal Serverless Escalation (`backend/modal_webhook.py`):** `@modal.fastapi_endpoint` persisting escalated defect manifests to `modal.Volume` (`junction-defect-archive`) and `modal.Dict` (`junction-escalation-state`).
 
 ---
 
-## 🖥 The 5 Dashboard Panels (Figma Make & SCADA Design)
+## 📊 Real Robot Results & OpenVINO 2026.4 Benchmarks
 
-The dashboard is engineered in an **obsidian industrial dark-mode** design system specifically proportioned for 16:9 laptop screens (`1440×900`) with zero numeric jitter (`tabular-nums`):
+### Recorded Autonomous Run (`run 20261114-195437`, `REAL` — 4/4 Bricks Sorted, 0 Human Touches)
+Full sorting loop (`pick → inspect → verdict → place → return home`) recorded on video with **4 of 4 bricks sorted into the correct bowl** (2 good → **green bowl**, 2 white-tape + blue-X defective → **pink bowl**):
 
-| Panel | Description | Key Technologies |
-|---|---|---|
-| **1. Closed-Loop Pipeline Bar** | Highlights the active stage in real time (`PERCEIVE → DETECT → REASON → ACT → OPTIMIZE`) with animated progress glow and hardware dispatch tags. | React, WebSockets, OpenVINO profiling |
-| **2. Dual-Camera & Heatmap Feed** | Overhead arena map (`CAM-01 Top-View Workspace`) with SO-ARM101 trajectory simulation + close-up inspection (`CAM-02 Anomalib v2.7.0`) with toggleable **Overlay**, **Heatmap**, and **Raw** modes, plus non-wrapping 0.55 decision gauge. | SVG, Cloudinary, Anomalib PatchCore |
-| **3. Intel Core Ultra X9 Telemetry** | Real-time latency & power cards for **50-TOPS NPU**, **12 Xe3 Cores**, and **CPU**, complete with offline pitch buttons (`Simulate Perfect`, `Simulate Defect`, `Simulate Re-grasp`, and continuous `Auto-Cycle Pitch Mode`). | Intel TCC/TSN, OpenVINO Heterogeneous |
-| **4. Gemini Multimodal Floor Copilot** | Hands-free operator commissioning tool: laptop webcam snapshot + microphone recording + text prompt chips. Returns structured Pydantic sorting rules and confirms aloud using `window.speechSynthesis`. | `gemini-3.8-flash`, WebRTC, SpeechSynthesis |
-| **5. Nemotron Audit & Root-Cause** | Scrollable audit feed of inspected bricks with Cloudinary composite thumbnails, anomaly scores, bin routing, and Nemotron physical root-cause analysis. Clicking any entry opens a 3-way high-res comparison modal. | Cloudinary API, Nemotron / LLM Reasoning |
+| Brick | Pick (`ACT v2` GPU) | Defect Score (`PatchCore v1` NPU) | Verdict → Bowl | Place (`SmolVLA v1` GPU) | Total Brick Cycle |
+|---:|---:|---:|---|---:|---:|
+| **#1** | `18.0 s` | **`0.32`** (`< 0.45`) | **GOOD → Green Bowl** | `3.9 s` | `49.9 s` *(incl. initial home)* |
+| **#2** | `12.7 s` | **`0.81`** (`> 0.60`) | **DEFECT → Pink Bowl** | `4.5 s` | **`29.8 s`** |
+| **#3** | `18.0 s` | **`0.05`** (`< 0.45`) | **GOOD → Green Bowl** | `4.7 s` | **`33.8 s`** |
+| **#4** | `—` | **`0.76`** (`> 0.60`) | **DEFECT → Pink Bowl** | `4.4 s` | `—` |
+
+- **Score separation:** Good bricks scored **`0.05–0.33`** (`GOOD < 0.45`); defective bricks (white tape + blue X) scored **`0.76–0.85`** (`DEFECT > 0.60`).
+- **Why hybrid `ACT v2` + `SmolVLA v1`:** `SmolVLA` achieved **3/3** (`100%`, `3.3–4.1 s`) on language-conditioned bowl placement, whereas `ACT v2` achieved **2.5/3** (`11.7–12.8 s`) on picking from the blue source bowl by re-planning every 1 s.
+
+### Measured OpenVINO 2026.4 Hardware Matrix (Intel Core Ultra X9 388H)
+Synced directly from [`edge_cell/reports/bench/`](edge_cell/reports/bench):
+
+| Model | Workload | Device | Precision | Median / p50 | p95 | Throughput | Compile | Quality / Notes |
+|---|---|---|---|---:|---:|---:|---:|---|
+| **`patchcore_v1`** | Anomaly (`148 MB`) | **NPU** *(chosen)* | `FP16` | **`181 ms`** | `183 ms` | `5.5 FPS` | `9.2 s` | `AUROC 0.949`, `F1 0.929` · Frees iGPU 100% |
+| **`patchcore_v1`** | Anomaly (`148 MB`) | **iGPU (`GPU`)** | `FP16` | **`24 ms`** | `26 ms` | `41.7 FPS` | `1.2 s` | `AUROC 0.949`, `F1 0.929` (12 val frames) |
+| **`patchcore_v1`** | Anomaly (`148 MB`) | **CPU** | `FP32` | **`245 ms`** | `247 ms` | `4.1 FPS` | `0.4 s` | `AUROC 0.949`, `F1 0.929` |
+| **`act_v2`** | Pick (`100×6` chunk) | **iGPU (`GPU`)** | `FP16` | **`12 ms`** | `13.8 ms` | `83.3 Hz` | `1.4 s` | `2.5/3` real picks (`exec_horizon=30`) |
+| **`smolvla_v1`** | Place (`450M`, `50×6`) | **iGPU (`GPU`)** | `FP16` | **`104 ms`** | `119.6 ms` | `9.6 Hz` | `15.2 s` | **`22×` faster than CPU** · `3/3` real places |
+| **`smolvla_v1`** | Place (`450M`, `50×6`) | **CPU** | `FP32` | **`2,325 ms`** | `2,480 ms` | `0.43 Hz` | `6.9 s` | `2.3 s` pause per 50-step chunk on CPU |
+
+---
+
+## 🗂 Repository Structure
+
+```text
+F:\JunctionH 2026
+├── edge_cell/                  # Layer 1: Standalone Physical Arm & Edge AI Stack (Ubuntu 26.04)
+│   ├── cell/                   # 30 Hz state machine, ACT/SmolVLA runner, ActionFilter, cameras
+│   ├── common/                 # Shared contracts (InspectionResult, CellEvent) & JSONL logger
+│   ├── configs/station.yaml    # Station calibration, poses, t_low=0.45 / t_high=0.60, devices
+│   ├── inspection/             # Anomalib 2.7.0 PatchCore v1 OpenVINO NPU/GPU/CPU service
+│   ├── models/                 # MODEL_CARD.json metadata (patchcore_v1, act_v2, smolvla_v1)
+│   ├── reports/                # Measured OpenVINO bench/*.json & real robot trials.md
+│   ├── tests/                  # Unit tests for state machine & safety filter
+│   └── start_demo.sh           # Station launch script (--real or --mock)
+├── backend/                    # Layer 2A: Unified Cloud, AI & Data Hub (FastAPI + WebSockets)
+│   ├── main.py                 # REST + /ws/live hub, state store, background cloud enrichment
+│   ├── duplo_cell_bridge.py    # Non-blocking watcher for edge_cell/runs, heatmaps & benchmarks
+│   ├── gemini_copilot.py       # Gemini 3.8 Flash multimodal operator rule extraction
+│   ├── nemotron_worker.py      # Verda B300 NVIDIA Nemotron 3.5 Super VL root-cause worker
+│   ├── cloudinary_media.py     # Cloudinary upload + l_overlay heatmap compositor
+│   ├── mariadb_store.py        # MariaDB 11.8 VECTOR(512) + WITH SYSTEM VERSIONING store
+│   └── modal_webhook.py        # Modal Serverless escalation endpoint (Volume + Dict)
+└── frontend/                   # Layer 2B: Precision Optics Mission Control UI (React + Vite)
+    └── src/                    # Cockpit, DualCameraFeed, IntelTelemetry, GeminiCopilot, Archive
+```
 
 ---
 
 ## ⚡ Quick Start Guide
 
-### 1. Prerequisites
-- **Python 3.11 - 3.14**
-- **Node.js v20+** and **npm**
-
-### 2. Backend Setup (`./backend`)
-```bash
+### 1. Start the Cloud, AI & Data Hub (`backend/` + `frontend/`)
+```powershell
+# 1. Start FastAPI Hub on port 8000
 cd backend
+.\.venv\Scripts\uvicorn.exe main:app --host 0.0.0.0 --port 8000
 
-# Create & activate virtual environment (Windows PowerShell)
-python -m venv .venv
-.\.venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Start FastAPI hub with WebSocket streaming
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-* Interactive Swagger Docs: **http://localhost:8000/docs**
-* Health Endpoint: **http://localhost:8000/api/health**
-* WebSocket Stream: **ws://localhost:8000/ws/live**
-
-### 3. Frontend Setup (`./frontend`)
-```bash
-cd frontend
-
-# Install packages
+# 2. Start Vite Mission Control UI on port 5173
+cd ../frontend
 npm install
-
-# Start Vite dev server
 npm run dev
 ```
-* Mission Control Dashboard: **http://localhost:5173**
+- **Mission Control UI:** `http://localhost:5173`
+- **Live Cloud Health (`5/5 LIVE`):** `http://localhost:8000/api/health`
 
----
+### 2. Run the Physical Edge Cell (`edge_cell/`) & Bridge (`duplo_cell_bridge.py`)
+```powershell
+# Run edge_cell unit tests & generate a mock 5-brick run
+cd edge_cell
+..\backend\.venv\Scripts\python.exe -m pytest
+..\backend\.venv\Scripts\python.exe -m cell.run --mock
 
-## 🔑 Environment Configuration (`backend/.env`)
-
-```env
-# Google AI Studio API Key for Gemini 3.8 Flash Multimodal Copilot
-GEMINI_API_KEY=your_gemini_api_key_here
-
-# Cloudinary URL for media asset uploads & composite overlays
-CLOUDINARY_URL=cloudinary://api_key:api_secret@cloud_name
-
-# Verda Cloud B300 NVIDIA Nemotron 3.5 Super VL
-NEMOTRON_BASE_URL=https://containers.datacrunch.io/nemotron-3-5-super-vl-b300/v1
-NEMOTRON_API_KEY=your_verda_api_key_here
-NEMOTRON_MODEL=nemotron-3.5-super-vl
-
-# MariaDB 11.7+ Native Vector Search (VECTOR(512) + VEC_DISTANCE_COSINE)
-MARIADB_URI=mysql://user:password@host:3306/junction_ai
-
-# Modal Serverless Escalation Webhook (`modal deploy backend/modal_webhook.py`)
-MODAL_WEBHOOK_URL=http://localhost:8000/mock-modal
-
-PORT=8000
-HOST=0.0.0.0
+# Sync edge_cell runs, heatmaps, station.yaml & OpenVINO benchmarks to the Cloud Hub
+cd ..
+.\backend\.venv\Scripts\python.exe backend\duplo_cell_bridge.py --watch edge_cell --once --hub http://localhost:8000
 ```
-
-> [!TIP]
-> **Honest Live vs. Fallback Telemetry:** `GET /api/health` exposes live connectivity status (`LIVE` vs `FALLBACK`) for all 5 cloud providers (`Gemini 3.8`, `Cloudinary`, `Nemotron B300`, `MariaDB Vector`, and `Modal`). Any unconfigured or offline service falls back cleanly in-process with zero errors.
-
----
-
-## 🤝 Edge Workstation Integration (`~/duplo-cell` → Cloud Hub)
-
-Copy `backend/duplo_cell_bridge.py` to the Ubuntu Intel Core Ultra X9 388H workstation (`~/duplo-cell`) or call `POST /api/cycles` directly. `push_cycle_async` dispatches on a daemon thread so the physical SO-ARM101 loop never blocks (`0 ms` added latency):
-
-```python
-from duplo_cell_bridge import push_cycle_async, get_active_policy
-
-# 1. Poll active Gemini sorting rules & Nemotron-tuned anomaly threshold
-policy = get_active_policy(hub_url="http://<CLOUD_HUB_LAN_IP>:8000")
-
-# 2. Fire-and-forget cycle push after each brick inspection
-push_cycle_async(
-    color="yellow",
-    defect_label="Marker Stripe Contamination",
-    anomaly_score=0.78,
-    action="DEFECTIVE_BOWL",
-    raw_image_path="/tmp/cam02_raw.png",
-    heatmap_image_path="/tmp/cam02_heatmap.png",
-    npu_latency_ms=9.4,
-    igpu_latency_ms=24.1,
-    cpu_latency_ms=2.1,
-    hub_url="http://<CLOUD_HUB_LAN_IP>:8000",
-)
+On the physical Ubuntu station laptop with the SO-ARM101 arm connected:
+```bash
+cd edge_cell && ./start_demo.sh --real
+# In a second terminal, stream live events & heatmaps to the Cloud Hub:
+python3 ../backend/duplo_cell_bridge.py --watch . --hub http://<HUB_HOST>:8000
 ```
-
----
-
-## 🎤 3-Minute Live Pitch Script for Judges
-
-1. **The Hook (30s):**
-   > *"Welcome to Team NightShift's Autonomous Physical AI Inspection Cell. Traditional factory inspection stops at classification—our cell perceives defects, reasons with vision-language-action policies, and physically sorts acceptable and defective Duplo blocks using a closed loop on Intel Core Ultra Series 3."*
-2. **The Intel Hardware Story (60s):**
-   > *"Notice our hardware telemetry panel. We mapped each workload to what Intel silicon does best: Anomalib v2.7.0 runs on the 50-TOPS NPU in 9.4ms consuming only 4.8W. SmolVLA runs on the 12 Xe3 iGPU cores in 24.1ms. Our deterministic kinematics loop runs on the CPU with Intel TCC/TSN in 2.1ms. That's a total decision cycle of ~35.6ms—enabling 28 Hz real-time manipulation without cloud latency."*
-3. **The Gemini Multimodal Copilot (60s):**
-   > *(Click the microphone or prompt chip: "Reject yellow bricks with black side stripes")*
-   > *"Watch our Gemini 3.8 Flash copilot. An operator can hold a marked coupon to the camera and speak in plain English. Gemini extracts a structured policy rule, deploys it to our robot state machine in milliseconds, and speaks voice confirmation aloud."*
-4. **Visual Audit Trail & Root-Cause (30s):**
-   > *(Click any cycle in the audit feed to open the 3-way modal)*
-   > *"Every single cycle is indexed with Cloudinary semi-transparent heatmap overlays and Nemotron root-cause analysis, giving factory managers a complete visual audit trail."*

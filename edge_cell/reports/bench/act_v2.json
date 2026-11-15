@@ -1,0 +1,3 @@
+{"model": "ACT v2 (Studio id bf35f9f2-20de-4286-a62a-ed905b159c0d), 154 eps, 10 epochs, batch 64, augment, A10G", "tag": "latency REAL; errors REPLAY (mostly training episodes)",
+ "chunk": "100x6", "chunk_latency_ms_median": {"GPU": 12}, "train_loss_end": 0.134, "val_loss_end": 0.324,
+ "note": "no text input: same output for both place tasks (task swap shift 0.0). Used for pick_present only, SmolVLA places."}

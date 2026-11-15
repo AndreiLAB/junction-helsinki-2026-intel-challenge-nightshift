@@ -82,6 +82,7 @@ _COLOR_PALETTE_NORM: dict[str, tuple[float, float, float]] = {
     "red": (225.0 / 255.0, 45.0 / 255.0, 45.0 / 255.0),
     "green": (35.0 / 255.0, 180.0 / 255.0, 85.0 / 255.0),
     "orange": (245.0 / 255.0, 120.0 / 255.0, 25.0 / 255.0),
+    "pink": (236.0 / 255.0, 72.0 / 255.0, 153.0 / 255.0),
     "cyan": (30.0 / 255.0, 200.0 / 255.0, 235.0 / 255.0),
     "purple": (150.0 / 255.0, 60.0 / 255.0, 220.0 / 255.0),
     "white": (235.0 / 255.0, 238.0 / 255.0, 242.0 / 255.0),
@@ -101,7 +102,7 @@ CREATE TABLE IF NOT EXISTS inspection_cycles (
     defect_label VARCHAR(128),
     verdict VARCHAR(32),
     anomaly_score FLOAT,
-    t_low FLOAT DEFAULT 0.35,
+    t_low FLOAT DEFAULT 0.45,
     t_high FLOAT DEFAULT 0.60,
     action VARCHAR(32),
     instruction VARCHAR(255),
@@ -136,7 +137,7 @@ CREATE TABLE IF NOT EXISTS inspection_cycles (
     defect_label VARCHAR(128),
     verdict VARCHAR(32),
     anomaly_score FLOAT,
-    t_low FLOAT DEFAULT 0.35,
+    t_low FLOAT DEFAULT 0.45,
     t_high FLOAT DEFAULT 0.60,
     action VARCHAR(32),
     instruction VARCHAR(255),
@@ -165,7 +166,7 @@ ALTER TABLE inspection_cycles
     ADD COLUMN IF NOT EXISTS run_id VARCHAR(64),
     ADD COLUMN IF NOT EXISTS brick_idx INT,
     ADD COLUMN IF NOT EXISTS verdict VARCHAR(32),
-    ADD COLUMN IF NOT EXISTS t_low FLOAT DEFAULT 0.35,
+    ADD COLUMN IF NOT EXISTS t_low FLOAT DEFAULT 0.45,
     ADD COLUMN IF NOT EXISTS t_high FLOAT DEFAULT 0.60,
     ADD COLUMN IF NOT EXISTS instruction VARCHAR(255),
     ADD COLUMN IF NOT EXISTS cell_state VARCHAR(32),
@@ -638,7 +639,7 @@ def _classify_defect_category(defect_norm: str) -> str:
         return "scratch"
     if any(k in defect_norm for k in ("crack", "stud", "split", "fracture", "deform")):
         return "crack"
-    if any(k in defect_norm for k in ("stripe", "marker", "line", "ink", "stain", "contaminat", "discolor")):
+    if any(k in defect_norm for k in ("stripe", "marker", "line", "ink", "stain", "contaminat", "discolor", "tape", "blue x")):
         return "stripe"
     if any(k in defect_norm for k in ("chip", "corner", "dent", "missing", "nick")):
         return "chip"
@@ -809,7 +810,7 @@ def _structured_telemetry_features(color_norm: str, defect_norm: str, score_clam
     )
     is_scratch = 1.0 if any(k in defect_norm for k in ("scratch", "groove", "scuff", "abrasion", "gouge")) else 0.0
     is_crack = 1.0 if any(k in defect_norm for k in ("crack", "stud", "split", "fracture", "deform")) else 0.0
-    is_stripe = 1.0 if any(k in defect_norm for k in ("stripe", "marker", "line", "ink", "stain", "contaminat", "discolor")) else 0.0
+    is_stripe = 1.0 if any(k in defect_norm for k in ("stripe", "marker", "line", "ink", "stain", "contaminat", "discolor", "tape", "blue x")) else 0.0
     is_chip = 1.0 if any(k in defect_norm for k in ("chip", "corner", "dent", "missing", "nick")) else 0.0
     is_glare = 1.0 if any(k in defect_norm for k in ("glare", "reflect", "specular", "ambiguous", "flare", "shadow")) else 0.0
     defect_feats = [is_pristine, is_scratch, is_crack, is_stripe, is_chip, is_glare]
@@ -1299,7 +1300,7 @@ async def record_cycle_and_find_similar(
         "defect_label": defect_label,
         "verdict": verdict,
         "anomaly_score": anomaly_score,
-        "t_low": _safe_float(cycle.get("t_low"), 0.35),
+        "t_low": _safe_float(cycle.get("t_low"), 0.45),
         "t_high": _safe_float(cycle.get("t_high"), 0.60),
         "action": action,
         "instruction": str(cycle.get("instruction") or "")[:255] or None,
@@ -1553,18 +1554,46 @@ async def get_policy_history(limit: int = 50) -> dict[str, Any]:
 
 def _normalize_benchmark_entry(raw: dict[str, Any]) -> dict[str, Any]:
     def _f(val: Any, default: float = 0.0) -> float:
+        if isinstance(val, str):
+            m = re.search(r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)", val)
+            if m:
+                den = float(m.group(2))
+                if den > 0:
+                    return round(float(m.group(1)) / den, 4)
         try:
             v = float(val) if val is not None else default
             return round(v, 4) if math.isfinite(v) else default
         except (TypeError, ValueError):
             return default
 
-    model = str(raw.get("model") or "patchcore_256").strip()[:64] or "patchcore_256"
+    model = str(raw.get("model") or "patchcore_v1").strip()[:64] or "patchcore_v1"
     device = str(raw.get("device") or "NPU").strip().upper()[:32] or "NPU"
-    precision = str(raw.get("precision") or raw.get("precision_mode") or "FP16").strip().upper()[:16] or "FP16"
+    prec_raw = str(raw.get("precision") or raw.get("precision_mode") or "FP16").strip().upper()
+    if "INT8" in prec_raw:
+        precision = "INT8"
+    elif "FP16" in prec_raw:
+        precision = "FP16"
+    elif "FP32" in prec_raw:
+        precision = "FP32"
+    else:
+        precision = prec_raw[:16] or "FP16"
     hint = str(raw.get("hint") or "LATENCY").strip().upper()[:32] or "LATENCY"
     ev_raw = str(raw.get("evidence") or "MOCK").strip().upper()
-    evidence = ev_raw if ev_raw in ("REAL", "REPLAY", "MOCK") else "MOCK"
+    if "REAL" in ev_raw:
+        evidence = "REAL"
+    elif "REPLAY" in ev_raw:
+        evidence = "REPLAY"
+    elif ev_raw in ("MOCK", "SIM"):
+        evidence = "MOCK"
+    else:
+        evidence = "REAL" if raw.get("evidence") else "MOCK"
+
+    p50 = _f(raw.get("latency_ms_p50"), 0.0)
+    p95 = _f(raw.get("latency_ms_p95"), p50)
+    fps = _f(raw.get("fps"), round(1000.0 / p50, 2) if p50 > 0 else 0.0)
+    comp = _f(raw.get("compile_s"), 0.0)
+    cached_comp = _f(raw.get("cached_compile_s"), comp)
+    notes_val = str(raw.get("notes") or (raw.get("evidence") if str(raw.get("evidence") or "").upper() not in ("REAL", "REPLAY", "MOCK", "") else "") or "").strip()[:500] or None
 
     return {
         "bench_key": f"{model}|{device}|{precision}|{hint}"[:160],
@@ -1572,16 +1601,16 @@ def _normalize_benchmark_entry(raw: dict[str, Any]) -> dict[str, Any]:
         "device": device,
         "precision": precision,
         "hint": hint,
-        "latency_ms_p50": _f(raw.get("latency_ms_p50"), 0.0),
-        "latency_ms_p95": _f(raw.get("latency_ms_p95"), 0.0),
-        "fps": _f(raw.get("fps"), 0.0),
-        "compile_s": _f(raw.get("compile_s"), 0.0),
-        "cached_compile_s": _f(raw.get("cached_compile_s"), 0.0),
+        "latency_ms_p50": p50,
+        "latency_ms_p95": p95,
+        "fps": fps,
+        "compile_s": comp,
+        "cached_compile_s": cached_comp,
         "size_mb": _f(raw.get("size_mb"), 0.0),
         "quality_metric": str(raw.get("quality_metric") or "image_F1").strip()[:32] or "image_F1",
         "quality": _f(raw.get("quality"), 0.0),
         "evidence": evidence,
-        "notes": str(raw.get("notes") or "").strip()[:500] or None,
+        "notes": notes_val,
     }
 
 
@@ -1593,6 +1622,9 @@ def _upsert_memory_benchmark(entry: dict[str, Any]) -> None:
         "updated_at": datetime.datetime.now().strftime("%H:%M:%S"),
     }
     with _memory_lock:
+        _memory_benchmarks[:] = [
+            b for b in _memory_benchmarks if b.get("model") not in ("patchcore_256", "smolvla_duplo")
+        ]
         for idx, existing in enumerate(_memory_benchmarks):
             if existing.get("bench_key") == entry["bench_key"]:
                 _memory_benchmarks.pop(idx)
@@ -1606,6 +1638,7 @@ def _db_upsert_benchmarks_sync(cfg: dict[str, Any], entries: list[dict[str, Any]
     conn = _connect_and_ensure_schema(cfg)
     try:
         with conn.cursor() as cur:
+            cur.execute("DELETE FROM openvino_benchmarks WHERE model IN ('patchcore_256', 'smolvla_duplo')")
             for item in entries:
                 cur.execute(
                     _UPSERT_BENCHMARK_SQL,

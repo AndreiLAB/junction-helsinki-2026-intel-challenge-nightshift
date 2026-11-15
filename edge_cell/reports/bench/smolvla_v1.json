@@ -1,0 +1,7 @@
+{"model": "SmolVLA smolvla_v1 (Studio id 47beec6f-de09-40eb-bfe7-c6c21e6becf7), OpenVINO export, chunk 50x6, 3 cameras 512x512 + task text",
+ "tag": "REAL latency on this laptop; errors are REPLAY (recorded demo inputs, training episodes)",
+ "chunk_latency_ms_median": {"GPU": 104, "CPU": 2325},
+ "compile_s": {"GPU": 15.2, "CPU": 6.9},
+ "replay_mean_abs_err_first_1s_GPU": {"pick_present": [3.75,3.48,1.91,3.4,2.05,2.07], "place_good": [7.2,3.92,1.93,1.27,1.82,1.33], "place_defect": [5.35,5.09,2.66,1.27,1.27,0.77]},
+ "task_swap_pan_shift_end_of_chunk": "place_good frames told 'defective': +4..+34; place_defect frames told 'good': -4..-36 (consistent sign = the text steers the arm)",
+ "source": "tests/replay_policy.py; full CPU log reports/bench/smolvla_v1_replay_cpu.txt"}

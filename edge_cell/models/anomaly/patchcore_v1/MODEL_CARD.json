@@ -1,0 +1,14 @@
+{
+ "name": "patchcore_v1",
+ "model": "patchcore",
+ "anomalib": "2.7.0",
+ "trained_on": "data/inspect_frames/v1/train_good",
+ "train_device": "CPU",
+ "fit_s": 122.9,
+ "test": {
+  "image_AUROC": 0.9487179517745972,
+  "image_F1Score": 0.9285714030265808
+ },
+ "export": "/home/intel/duplo-cell/models/anomaly/patchcore_v1/weights/openvino/model.xml",
+ "evidence": "REPLAY (frames cut from duplo_v1 demos, held-out by episode)"
+}

@@ -1,0 +1,13 @@
+{
+ "model": "act_quick (Studio ACT, 10 eps)",
+ "device": "GPU",
+ "precision": "FP32 export (OV GPU default inference precision)",
+ "latency_ms_p50": 8.3,
+ "latency_ms_p95": 8.9,
+ "fps": 120.5,
+ "compile_s": 3.9,
+ "size_mb": null,
+ "quality_metric": "pick_present success (robot)",
+ "quality": "2/2 picks REAL (CPU runs)",
+ "evidence": "REAL, zero inputs, predict_action_chunk 100x6, tests/probe_inference.py, Sat 22:20"
+}
